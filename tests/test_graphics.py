@@ -46,7 +46,7 @@ def test_original_soft_mask_becomes_png_alpha_without_ai(tmp_path):
     with pikepdf.Pdf.open(source) as pdf:
         image=next(r for r in scan_page(pdf,0)[1] if r['kind']=='image')
         asset=_rgba_image(image['object'],tmp_path/'original-alpha')
-    with Image.open(asset) as result:assert list(result.getchannel('A').getdata())==[0,85,170,255]
+    with Image.open(asset) as result:assert list(result.getchannel('A').tobytes())==[0,85,170,255]
 
 
 def test_clip_transform_tracks_q_and_q_restore(tmp_path):
