@@ -1,0 +1,107 @@
+{
+  "schema": "ali-component-quality-review/1",
+  "reference_id": "component-quality-portal-20261107",
+  "component_id": null,
+  "source_sha256": null,
+  "master_sha256": null,
+  "reviewer_type": null,
+  "reviewer_type_allowed": [
+    "agent_visual_review",
+    "human_visual_review"
+  ],
+  "review_status": "not_assessed",
+  "user_approved": false,
+  "criteria": [
+    {
+      "id": "CQ-01",
+      "name": "實體完整",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-02",
+      "name": "幾何與原稿忠實度",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-03",
+      "name": "遮擋後完整度",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-04",
+      "name": "空洞與遮罩正確",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-05",
+      "name": "材質與細節",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-06",
+      "name": "透明素材可用",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-07",
+      "name": "母版與外觀分離",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-08",
+      "name": "畫面邏輯",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    },
+    {
+      "id": "CQ-09",
+      "name": "原生可用與資料不變",
+      "status": "not_assessed",
+      "evidence": [],
+      "findings": null,
+      "required_corrections": []
+    }
+  ],
+  "status_allowed": [
+    "pass",
+    "fail",
+    "not_assessed"
+  ],
+  "evidence_required": [
+    "isolated_master",
+    "gray_light_dark_alpha_comparison",
+    "100_percent_detail",
+    "400_percent_detail",
+    "foreground_hidden_complete_subject",
+    "effects_on_off",
+    "source_composition_anchor_comparison",
+    "parameters_and_versions",
+    "adobe_saved_and_reopened"
+  ],
+  "verdict": "not_assessed",
+  "decision_rule": "Any failed or unassessed CQ gate forbids a quality-complete claim; native/test/visual gates do not replace each other. This template is not an automatic visual evaluator.",
+  "open_issues": []
+}
