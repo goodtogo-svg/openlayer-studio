@@ -18,11 +18,18 @@
 
 **Status:** executable local preflight/extraction MVP + Adobe JSX script generator. Adobe native outputs are *not* produced by Python alone. v0.4 adds isolated SAM 2.1, PaddleOCR, visual font matching and Real-ESRGAN workers. Full automatic editable document reconstruction remains incomplete; see docs/architecture-v0.4-zh-TW.md.
 
+## 安裝需求
+
+- macOS Apple Silicon（已在 M2 24GB 實測）。
+- **Python 3.11 以上**。macOS 內建的 `python3` 是 3.9，不能用；請用 Homebrew（`brew install python@3.11`）或 python.org 安裝。
+- **Xcode Command Line Tools**（`xcode-select --install`）。SR 引擎的 basicsr 需要從原始碼編譯。
+- 磁碟空間：核心約 200 MB；SR 引擎環境約 1.4 GB；全部引擎與權重約 6 GB。
+
 ## Quick start (MacBook Pro M2 24GB)
 ```bash
 xcode-select --install # if developer tools are missing
 cd openlayer-studio
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e '.[test]'
@@ -111,7 +118,12 @@ Typical output: original PDF font family, whether an exact *name* is installed, 
 .venv/bin/ali scene-adobe jobs/new-scene/scene.json --app indesign --out jobs/new-scene/indesign
 ```
 
-先安裝各引擎的獨立環境與模型；缺少時返回失敗。新工作目錄避免覆寫，`--resume` 只用於相同來源／選項的工作。舊 `process --upscale 4` 仍是 Lanczos，不是真正 AI；請使用 `engine sr`。
+先安裝各引擎的獨立環境與模型；缺少時返回失敗。
+
+SR 引擎注意事項：
+- 安裝時刻意不裝 gfpgan／facexlib（人臉修復，本專案不使用），所以 `pip check` 會提示 realesrgan 缺少這兩個套件，屬正常現象。
+- 在 SR 環境直接 `import basicsr` 會出現 `torchvision.transforms.functional_tensor` 找不到的錯誤，這是 BasicSR 1.4.2 與新版 torchvision 的已知相容問題。`ali engine sr` 的 worker 會先建立相容別名再匯入，請用 `ali engine sr` 驗證，不要用單純 import 判斷安裝是否成功。
+新工作目錄避免覆寫，`--resume` 只用於相同來源／選項的工作。舊 `process --upscale 4` 仍是 Lanczos，不是真正 AI；請使用 `engine sr`。
 
 Codex 專案 Skill 位於 `.agents/skills/openlayer-studio/SKILL.md`。Scene Graph 的文字預設隱藏，只有字型與版面核准後才輸出原生文字；真實多頁刊物的整份可編輯版面復原尚未完成。
 
