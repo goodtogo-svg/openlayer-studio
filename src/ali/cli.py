@@ -18,6 +18,7 @@ def main(argv=None):
     r=sub.add_parser('reconstruct');r.add_argument('input');r.add_argument('--out',required=True);r.add_argument('--engines',default='ocr');r.add_argument('--options',default='{}');r.add_argument('--resume',action='store_true')
     fi=sub.add_parser('font-index');fi.add_argument('catalog');fi.add_argument('--out',required=True)
     sc=sub.add_parser('scene-adobe');sc.add_argument('scene');sc.add_argument('--app',choices=('photoshop','illustrator','indesign'),required=True);sc.add_argument('--out',required=True)
+    sa=sub.add_parser('scene-artcraft',help='Export visible raster layers to ArtCraft 2D editor scene JSON');sa.add_argument('scene');sa.add_argument('--out',required=True)
     pr=sub.add_parser('pdf-rebuild');pr.add_argument('input');pr.add_argument('--out',required=True);pr.add_argument('--font-map',required=True,help='JSON source-font to installed Adobe font mapping')
     ar=sub.add_parser('article-rebuild',help='One story per article with threaded layout columns');ar.add_argument('input');ar.add_argument('--out',required=True);ar.add_argument('--font-map',required=True);ar.add_argument('--layout',required=True)
     gr=sub.add_parser('graphics-rebuild',help='Separate original image assets from an approved flattened PDF background');gr.add_argument('input',help='Approved INDD');gr.add_argument('--background',required=True);gr.add_argument('--out',required=True);gr.add_argument('--classification',help='JSON illustration_regions in page points')
@@ -63,6 +64,9 @@ def main(argv=None):
         elif args.cmd=='scene-adobe':
             from .scene_adobe import generate_scene
             print(json.dumps(generate_scene(args.scene,args.app,args.out),indent=2))
+        elif args.cmd=='scene-artcraft':
+            from .scene_artcraft import generate_artcraft
+            print(json.dumps(generate_artcraft(args.scene,args.out),indent=2))
         elif args.cmd=='graphics-rebuild':
             from .graphics import prepare_graphics
             classification=json.loads(Path(args.classification).read_text()) if args.classification else None
