@@ -128,12 +128,17 @@ def _char_colours(src, region, box, text):
         counts = np.bincount(labels.ravel(), minlength=3) / len(labels)
         best = max((c for c in range(3) if counts[c] > 0.08), key=lambda c: np.linalg.norm(centres[c] - bg))
         colours.append(centres[best])
-    snapped = []
+    groups = []
     for c in colours:
         if c is None:
             continue
-        if not any(np.linalg.norm(s - c) < 45 for s in snapped):
-            snapped.append(c)
+        g = next((g for g in groups if np.linalg.norm(g[0] - c) < 100), None)   # shading inside one ink is not a run
+        if g is None:
+            groups.append([c])
+        else:
+            g.append(c)
+    snapped = [np.mean(g, axis=0) for g in groups]
+    raw = [c for c in colours if c is not None]
     out = []
     for c in colours:
         out.append(None if c is None else min(snapped, key=lambda s: np.linalg.norm(s - c)))
@@ -147,13 +152,13 @@ def _char_colours(src, region, box, text):
         counts = np.bincount([i for i in idx if i is not None], minlength=len(snapped))
         major = int(counts.argmax())
         for k in range(len(snapped)):
-            if k != major and counts[k] < counts[major] and np.linalg.norm(snapped[k] - box_bg) < 45:
+            if k != major and counts[k] < counts[major] and np.linalg.norm(snapped[k] - box_bg) < 80:
                 out = [snapped[major] if i == k else c for i, c in zip(idx, out)]
     # spaces take the colour of the previous character
     for i in range(len(out)):
         if out[i] is None:
             out[i] = out[i - 1] if i and out[i - 1] is not None else next((c for c in out if c is not None), bg)
-    return out, bg
+    return out, bg, raw
 
 
 def _glyph_mask(src, region, colours, line_h):
@@ -215,7 +220,7 @@ def _decorations(src, glyph, fill_colours, bg):
     ring = src[near].astype(np.float32)
     outline = np.median(ring, axis=0)
     fills = [np.array(c, np.float32) for c in fill_colours]
-    if np.linalg.norm(outline - bg) < 40 or min(np.linalg.norm(outline - f) for f in fills) < 40:
+    if np.linalg.norm(outline - bg) < 60 or min(np.linalg.norm(outline - f) for f in fills) < 40:
         return []
     close = (np.linalg.norm(src.astype(np.float32) - outline, axis=2) < 45) & (dist > 0) & (dist < 40)
     count, labels = cv2.connectedComponents((close | glyph).astype(np.uint8), 8)
@@ -237,7 +242,7 @@ def _decorations(src, glyph, fill_colours, bg):
     down = py.max() - ys.max()
     up = ys.min() - py.min()
     # an outline surrounds the glyphs on every side and is thin compared with them
-    if up < 1 or width > 0.2 * (ys.max() - ys.min() + 1):
+    if up < 1 or width > 0.15 * (ys.max() - ys.min() + 1):
         return []
     decos = [{'name': 'OUTLINE', 'color': _hex(outline), 'stroke': round(2 * min(width, up + 0.5), 2), 'dy': 0}]
     if down - up > 2:
@@ -325,7 +330,7 @@ def _fit(text, glyph, fonts, line_h, skews, trackings, ignore=None):
         if upright and upright[0] not in shortlist:
             shortlist.append(upright[0])
         best = max((_refine(c, text, observed, keep_px, (ox, oy), occluded) for c in shortlist),
-                   key=lambda c: c['iou'] - 0.1 * c['skew'])
+                   key=lambda c: c['iou'] - (0.3 if occluded else 0.1) * c['skew'])   # a slanted cut-off edge is not italics
         # pruning can also cut real letters when the fit is off; keep the best round, not the last
         if overall is None or best['iou'] > overall[0]['iou']:
             overall = (best, glyph)
@@ -392,7 +397,20 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
             cv2.fillPoly(region, [np.round(poly).astype(np.int32)], 255)
         region = cv2.dilate(region, np.ones((5, 5), np.uint8))
         line_h = line['box'][3] - line['box'][1]
-        colours, bg = _char_colours(img, region, line['box'], text)
+        colours, bg, raw = _char_colours(img, region, line['box'], text)
+        # Keep colour runs only when they look designed: every run at least two letters, every ink well away
+        # from the background. Otherwise shading or a stray cell would split one word into several objects.
+        line_runs = [(a, b_, c) for a, b_, c in _runs(text, colours) if text[a:b_].strip()]
+        designed = all((len(text[a:b_].strip()) >= 2 or not text[a:b_].strip().isalnum())
+                       and np.linalg.norm(np.array(c, float) - bg) > 100 for a, b_, c in line_runs) and \
+            all(np.linalg.norm(np.array(p[2], float) - np.array(q[2], float)) > 100
+                for i, p in enumerate(line_runs) for q in line_runs[i + 1:] if not np.array_equal(p[2], q[2]))
+        if len(line_runs) > 1 and not designed:
+            lens = {}
+            for a, b_, c in line_runs:
+                lens[tuple(np.round(c, 3))] = lens.get(tuple(np.round(c, 3)), 0) + len(text[a:b_].strip())
+            major = np.array(max(lens, key=lens.get), np.float32)
+            colours = [major for _ in colours]
         glyph = _glyph_mask(img, region, colours, line_h)
         occ = _occluder(img, line['box'], colours, bg, line_h, glyph)
         if glyph.sum() < 50:
