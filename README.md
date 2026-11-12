@@ -127,6 +127,10 @@ SR 引擎注意事項：
 
 Codex 專案 Skill 位於 `.agents/skills/openlayer-studio/SKILL.md`。Scene Graph 的文字預設隱藏，只有字型與版面核准後才輸出原生文字；真實多頁刊物的整份可編輯版面復原尚未完成。
 
+## 圖片轉向量（形狀辨識＋即時文字）
+
+`ali vector-rebuild image.png --out jobs/name` 自動分析圖片並重建成向量 SVG／PDF／PDF 相容 .ai：形狀與漸層取代點陣圖，文字是可編輯文字。說明見 [圖片 → 向量重建](docs/vector-rebuild-zh-TW.md)。
+
 ## 文章編輯稿：使用 story 與欄位串接
 
 文章不能以每一行獨立文字框交付。使用 `ali article-rebuild`，一篇文章一個 story，按欄位串接，段落內自動換行。參考 [文章串接流程](docs/article-flow-zh-TW.md)；舊 `pdf-rebuild` 的逐 span 模式保留作診斷用途。
