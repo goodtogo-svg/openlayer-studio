@@ -19,6 +19,8 @@ def main(argv=None):
     fi=sub.add_parser('font-index');fi.add_argument('catalog');fi.add_argument('--out',required=True)
     sc=sub.add_parser('scene-adobe');sc.add_argument('scene');sc.add_argument('--app',choices=('photoshop','illustrator','indesign'),required=True);sc.add_argument('--out',required=True)
     pr=sub.add_parser('pdf-rebuild');pr.add_argument('input');pr.add_argument('--out',required=True);pr.add_argument('--font-map',required=True,help='JSON source-font to installed Adobe font mapping')
+    pa=sub.add_parser('pdf-ai',help='Compile a PDF into a native Illustrator .ai build job (paths, live/outlined text, images)');pa.add_argument('input');pa.add_argument('--out',required=True,help='New job directory');pa.add_argument('--font-map',help='JSON: PDF font name -> Illustrator PostScript name');pa.add_argument('--engine',choices=('illustrator-import','ir'),default='illustrator-import',help='illustrator-import: Illustrator imports the graphics, text is rebuilt; ir: rebuild every object from the IR');pa.add_argument('--text',choices=('auto','live','outline','keep'),default='auto',help='auto: live text when the font is installed, else embedded-font outlines; keep: leave Illustrator\'s imported text');pa.add_argument('--color-mode',choices=('auto','rgb','cmyk'),default='auto');pa.add_argument('--pages',help='e.g. 1-3,5');pa.add_argument('--link-images',action='store_true',help='Keep images linked instead of embedding them')
+    pv=sub.add_parser('pdf-ai-verify',help='Compare the reopened .ai proofs with the source PDF');pv.add_argument('job');pv.add_argument('--tolerance',type=float,default=0.02)
     ar=sub.add_parser('article-rebuild',help='One story per article with threaded layout columns');ar.add_argument('input');ar.add_argument('--out',required=True);ar.add_argument('--font-map',required=True);ar.add_argument('--layout',required=True)
     gr=sub.add_parser('graphics-rebuild',help='Separate original image assets from an approved flattened PDF background');gr.add_argument('input',help='Approved INDD');gr.add_argument('--background',required=True);gr.add_argument('--out',required=True);gr.add_argument('--classification',help='JSON illustration_regions in page points')
     ts=sub.add_parser('text-styles');ts.add_argument('input');ts.add_argument('--regions',required=True);ts.add_argument('--out',required=True)
@@ -74,6 +76,14 @@ def main(argv=None):
             mapping=json.loads(Path(args.font_map).read_text(encoding='utf-8'))
             result=build_article_plan({'source':source,'source_sha256':digest(source),'font_map':mapping},args.layout,args.out)
             print(json.dumps(result,ensure_ascii=False,indent=2))
+        elif args.cmd=='pdf-ai':
+            from .pdf_to_ai import compile_pdf
+            mapping=json.loads(Path(args.font_map).read_text(encoding='utf-8')) if args.font_map else {}
+            print(json.dumps(compile_pdf(args.input,args.out,mapping,args.text,args.color_mode,args.pages,not args.link_images,args.engine),ensure_ascii=False,indent=2))
+        elif args.cmd=='pdf-ai-verify':
+            from .pdf_to_ai import verify_job
+            result=verify_job(args.job,tolerance=args.tolerance);print(json.dumps(result,ensure_ascii=False,indent=2))
+            return 0 if result['status']=='candidate_pass' else 2
         elif args.cmd=='pdf-rebuild':
             from .pdf_rebuild import prepare_rebuild
             mapping=json.loads(Path(args.font_map).read_text(encoding='utf-8'))
