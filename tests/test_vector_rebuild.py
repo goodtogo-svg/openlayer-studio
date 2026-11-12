@@ -174,3 +174,28 @@ def test_scene_refine_helpers():
     px = np.array([[60., 70., 60.]] * 30 + [[30., 45., 35.]] * 10 + [[240., 215., 20.]] * 10, np.float32)
     c = scene_refine._stroke_colour(px, plate)
     assert c[0] < 60
+
+
+@pytest.mark.skipif(not LIB.is_file(), reason='Liberation Sans Bold not installed')
+def test_closest_face_by_letter_shapes(tmp_path):
+    """Letters cut from a line set in one face are closest to that face, whatever the spacing; a face the target
+    app lacks is never a candidate."""
+    from ali.vector_rebuild import glyph_match, scene
+    from ali.vector_rebuild.fonts import Font, installed_names, pool_candidates
+    from ali.vector_rebuild.text import rasterise, NOMINAL, fit_matrix
+    faces = [Font(p) for p in (LIB, LIB.with_name('LiberationSerif-Bold.ttf'), LIB.with_name('LiberationMono-Bold.ttf')) if p.is_file()]
+    if len(faces) < 2:
+        pytest.skip('needs two Liberation faces')
+    text = 'WORDS TOOL'
+    m = fit_matrix(faces[0], text, (10, 10, 400, 60), 0, .12)    # wide letter-spacing
+    G = rasterise(faces[0], text, NOMINAL, m, (80, 440), tracking=.12)
+    V = np.ones_like(G)
+    sg = glyph_match.source_glyphs(G, V, text)
+    assert sg is not None and len(sg) == 9
+    ranked = glyph_match.rank(faces, text, sg, scene.GLYPH_DISTORT_COST)
+    assert ranked[0][1].postscript == faces[0].postscript and ranked[0][0] > ranked[1][0] + .05
+    names = tmp_path / 'names.json'
+    names.write_text(json.dumps([{'name': faces[1].postscript}]))
+    assert installed_names(names) == {faces[1].postscript}
+    picked = pool_candidates([str(LIB.parent)], str(names))
+    assert {f.postscript for f in picked} <= {faces[1].postscript}

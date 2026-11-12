@@ -681,6 +681,13 @@ def in_context(cand):
     return bool(words & DESIGN_TERMS) and len(CONTEXT['words'] & DESIGN_TERMS) >= 2
 
 
+SHORTLIST = 4
+GLYPH_SHORTLIST = 5
+# letters are compared at the face's own proportions: a face that must be widened or narrowed to match is
+# another width of the design, so the common width factor costs more here than a stretch costs a line fit
+GLYPH_DISTORT_COST = .5
+GLYPH_WEIGHT = 4   # letter likeness separates faces; whole-line IoU mostly measures spacing and stretch
+DISTORT_COST = .15   # IoU per unit of |ln(width scale / height scale)|: a 20% stretch costs .027
 TRACKING_COST = .1   # IoU per unit of tracking (0.15 tracking needs +0.015 IoU)
 # words of the graphic-design domain this tool serves: preferred when hidden letters leave a tie
 DESIGN_TERMS = set('''font fonts type typeface typography letter letters lettering word words text design designer layout grid poster
@@ -716,20 +723,27 @@ def fit_line(text, G, V, fonts, box):
         for tr in (TRACKINGS if ' ' not in t or len(t) > 1 else (0.0,)):
             for b in cands:
                 s, m = _score(font, t, b, G, V, tr)
-                # letter-spacing must earn its place: designs set most lines at the face's own spacing
-                if s - TRACKING_COST * tr > adj:
-                    adj, best = s - TRACKING_COST * tr, (s, b, m, tr)
+                if m is None:
+                    continue
+                # letter-spacing must earn its place: designs set most lines at the face's own spacing;
+                # a face that has to be stretched far from its own proportions is a different face
+                a = s - TRACKING_COST * tr - DISTORT_COST * distortion(m)
+                if a > adj:
+                    adj, best = a, (s, b, m, tr)
         return best
 
-    usable = [f for f in fonts if f.covers(text.replace(' ', '') or 'x')]
+    usable = shortlist(text, G, V, fonts, box)
     if not usable:
         return None
     results = []
     for f in usable:
         s, b, m, tr = best_box(f, text)
-        results.append((s, f, text, b, m, tr))
+        if m is not None:
+            results.append((adjusted(s, m, tr), s, f, text, b, m, tr))
+    if not results:
+        return None
     results.sort(key=lambda r: -r[0])
-    s, font, t, b, m, tr = results[0]
+    _, s, font, t, b, m, tr = results[0]
     # dictionary correction, one word at a time
     tokens = t.split(' ')
     for i, tok in enumerate(list(tokens)):
@@ -754,12 +768,106 @@ def fit_line(text, G, V, fonts, box):
         for f in usable:
             if f is font:
                 continue
+            if not f.covers(t.replace(' ', '')):
+                continue
             s2, b2, m2, tr2 = best_box(f, t)
-            if s2 > s:
+            if m2 is not None and adjusted(s2, m2, tr2) > adjusted(s, m, tr):
                 s, font, b, m, tr = s2, f, b2, m2, tr2
     return {'iou': round(float(s), 3), 'font': font, 'text': t, 'box': [round(v, 2) for v in b], 'm': m, 'ocr_text': text, 'tracking': tr,
-            'hidden_ends': [hl, hr]}
+            'hidden_ends': [hl, hr], 'fit': round(float(adjusted(s, m, tr)), 4), 'distortion': round(distortion(m), 3)}
 
+
+def distortion(m):
+    """How far a fit squashes or stretches the face away from its own proportions (|ln(sx/sy)|)."""
+    return abs(math.log(abs(m[0] / m[3]))) if m and m[0] and m[3] else 0.0
+
+
+def adjusted(s, m, tr):
+    return s - TRACKING_COST * tr - DISTORT_COST * distortion(m)
+
+
+def shortlist(text, G, V, fonts, box, k=None):
+    """The faces worth a full fit: with many installed fonts, a quick fit at the visible box ranks them first."""
+    k = k or SHORTLIST
+    usable = [f for f in fonts if f.covers(text.replace(' ', '') or 'x')]
+    if len(usable) <= k:
+        return usable
+    ranked = []
+    for f in usable:
+        best = -9
+        for tr in (0.0, .06):
+            s, m = _score(f, text, box, G, V, tr)
+            if m is not None:
+                best = max(best, adjusted(s, m, tr))
+        ranked.append((best, f.postscript, f))
+    ranked.sort(key=lambda r: (-r[0], r[1]))
+    return [f for _, _, f in ranked[:k]]
+
+
+def font_match(font, total, n):
+    """What the choice of face rests on: its mean fit and the runners-up (the source font is unknown, so every
+    choice is the closest installed face, not an identification)."""
+    ranked = sorted(total.items(), key=lambda kv: -kv[1])
+    return {'postscript': font.postscript, 'family': getattr(font, 'family', None), 'style': getattr(font, 'style', None),
+            'score': round(total[font.postscript] / max(n, 1), 3), 'candidates': len(total),
+            'runners_up': [[k, round(v / max(n, 1), 3)] for k, v in ranked if k != font.postscript][:3]}
+
+
+def face_table(jobs, fonts):
+    """Fit every (text, G, V, box) job with the faces worth trying. Faces come from letter-shape likeness (where the
+    visible letters separate) and from a quick whole-line fit. Returns (fits, likeness): postscript -> per-job list."""
+    from . import glyph_match
+    glyphs = [glyph_match.source_glyphs(G, V, text) for text, G, V, box in jobs]
+    like = {}
+    for k, ((text, G, V, box), sg) in enumerate(zip(jobs, glyphs)):
+        if sg:
+            for sim, f in glyph_match.rank(fonts, text, sg, GLYPH_DISTORT_COST):
+                like.setdefault(f.postscript, [None] * len(jobs))[k] = sim
+    paired = [k for k, g in enumerate(glyphs) if g]
+    union = []
+    if paired:
+        mean = {ps: sum(v[k] for k in paired) / len(paired) for ps, v in like.items() if all(v[k] is not None for k in paired)}
+        by_ps = {f.postscript: f for f in fonts}
+        union = [by_ps[ps] for ps in sorted(mean, key=lambda ps: (-mean[ps], ps))[:GLYPH_SHORTLIST]]
+    for text, G, V, box in jobs:
+        union += [f for f in shortlist(text, G, V, fonts, box, k=2 if paired else None) if f not in union]
+    fits = {f.postscript: [fit_line(text, G, V, [f], box) for text, G, V, box in jobs] for f in union}
+    return fits, {ps: like.get(ps, [None] * len(jobs)) for ps in fits}
+
+
+def face_choice(fits, like, members):
+    """Total score of each face over the member jobs: whole-line fit, plus letter likeness (weighted, it is what tells
+    faces apart) where the letters could be compared."""
+    paired = [k for k in members if any(like[ps][k] is not None for ps in like)]
+    total = {}
+    for ps, rs in fits.items():
+        if any(like[ps][k] is None for k in paired):
+            continue
+        total[ps] = sum(rs[k]['fit'] if rs[k] else -1 for k in members) / len(members) + \
+            (GLYPH_WEIGHT * sum(like[ps][k] for k in paired) / len(paired) if paired else 0)
+    if not total:
+        total = {ps: sum(rs[k]['fit'] if rs[k] else -1 for k in members) / len(members) for ps, rs in fits.items()}
+    return total
+
+
+def agree_font(jobs, fonts, log=print, what='lines'):
+    """One face for all jobs: the closest installed face by letter shapes and fit."""
+    if not jobs:
+        return []
+    fits, like = face_table(jobs, fonts)
+    total = face_choice(fits, like, list(range(len(jobs))))
+    best = max(total, key=total.get)
+    match = font_match(next(f for f in fonts if f.postscript == best), total, 1)
+    log('scene: %s face %s (score %.3f; next %s)' % (what, best, match['score'], match['runners_up'][:2]))
+    out = []
+    for k, r in enumerate(fits[best]):
+        if r is None:   # the agreed face lacks a glyph here: the best face that has it
+            alts = [fits[f][k] for f in fits if fits[f][k]]
+            r = max(alts, key=lambda x: x['fit']) if alts else None
+        if r:
+            r['font_match'] = match
+        out.append(r)
+    return out
 
 def page_matrix(m, cx, cy, theta, ulo, vlo):
     a, b, c, d, e, f = m
@@ -891,31 +999,10 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
     results, plate_text, pending = {}, {}, []
     from .scene_build import text_frames, _alpha_text
     by_ps = {f.postscript: f for f in fonts}
-    for i in [i for i in order if elements[i]['kind'] != 'title'] + [i for i in order if elements[i]['kind'] == 'title']:
+    plate_jobs = []
+    for i in [i for i in order if elements[i]['kind'] != 'title']:
         e = elements[i]
         occ = occluders(i)
-        if e['kind'] == 'title':
-            t = e['line']
-            G, ulo, vlo = title_ink(t)
-            L, h = G.shape[1], G.shape[0]
-            # lettering of plates under this title has the title's colour too: neither ink nor evidence
-            below = np.zeros((H, W), bool)
-            for j, tm in plate_text.items():
-                if z[j] < z[i]:
-                    below |= tm
-            unk, _ = strip(below.astype(np.uint8), t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h, nearest=True)
-            vis, _ = strip((~occ).astype(np.uint8), t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h, nearest=True)
-            V = (vis > 0) & (unk == 0)
-            img, inside = strip(src, t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h)
-            bgl, _ = strip(bg_model, t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h)
-            G = _components_in_band((dist(img, t['glyph']) < np.minimum(dist(img, bgl), 110)) & inside & V, img.shape[0] / 2, t['h'] * .4)
-            if _ink_box(G, by_rows=False) is None:
-                continue
-            per_font = {f.postscript: fit_line(t['text'], G & V, V, [f], _ink_box(G, by_rows=False)) for f in fonts}
-            per_font = {k: v for k, v in per_font.items() if v}
-            if per_font:
-                pending.append((i, t, ulo, vlo, per_font))
-            continue
         p = e['plate']
         c = (p['cx'], p['cy'], p['theta'])
         ext = p['h']
@@ -981,25 +1068,58 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
                     '%s/plate-%d.png' % (debug_dir, i))
             if box is not None:
                 text = ' '.join(l['text'] for l in sorted(p['lines'], key=lambda l: to_local(*c, l['cx'], l['cy'])[0]))
-                f = fit_line(text, G & V, V, fonts, box)
-                if f:
-                    bx = f['box']
-                    el['texts'].append({'text': f['text'], 'ocr_text': text, 'font': f['font'].postscript, 'color': glyph_hex,
-                                        'box': [round(bx[0] + ulo, 2), round(bx[1] + vlo, 2), round(bx[2] + ulo, 2), round(bx[3] + vlo, 2)],
-                                        'iou': f['iou'], 'tracking': f['tracking'], 'inferred': f['text'] != text or any(f['hidden_ends'])})
+                plate_jobs.append((el, text, G & V, V, box, ulo, vlo, glyph_hex))
         results[i] = el
+    # one typeface for the lettering on all plates (a poster's tapes repeat the same face): the closest face overall
+    per_job = agree_font([(text, G, V, box) for _, text, G, V, box, _, _, _ in plate_jobs], fonts, log, 'plate lettering')
+    for (el, text, G, V, box, ulo, vlo, glyph_hex), f in zip(plate_jobs, per_job):
+        if f:
+            bx = f['box']
+            el['texts'].append({'text': f['text'], 'ocr_text': text, 'font': f['font'].postscript, 'color': glyph_hex,
+                                'box': [round(bx[0] + ulo, 2), round(bx[1] + vlo, 2), round(bx[2] + ulo, 2), round(bx[3] + vlo, 2)],
+                                'iou': f['iou'], 'tracking': f['tracking'], 'inferred': f['text'] != text or any(f['hidden_ends']),
+                                'font_match': f['font_match']})
+    for i, el in results.items():
         el['id'] = 'tmp'
         tm = np.zeros((H, W), np.float32)
         for fr in text_frames(el, fonts):
             tm = np.maximum(tm, _alpha_text(by_ps[fr['font']], fr['text'], fr['m'], fr['tracking'], (H, W)))
         plate_text[i] = cv2.dilate((tm > .2).astype(np.uint8), np.ones((5, 5), np.uint8)).astype(bool)
-    # one typeface per title size class (designs repeat the same face): the font with the best total fit
-    for _, t, ulo, vlo, per_font in pending:
+    title_jobs = []
+    for i in [i for i in order if elements[i]['kind'] == 'title']:
+        e = elements[i]
+        occ = occluders(i)
+        t = e['line']
+        G, ulo, vlo = title_ink(t)
+        L, h = G.shape[1], G.shape[0]
+        # lettering of plates under this title has the title's colour too: neither ink nor evidence
+        below = np.zeros((H, W), bool)
+        for j, tm in plate_text.items():
+            if z[j] < z[i]:
+                below |= tm
+        unk, _ = strip(below.astype(np.uint8), t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h, nearest=True)
+        vis, _ = strip((~occ).astype(np.uint8), t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h, nearest=True)
+        V = (vis > 0) & (unk == 0)
+        img, inside = strip(src, t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h)
+        bgl, _ = strip(bg_model, t['cx'], t['cy'], t['theta'], ulo, ulo + L, vlo, vlo + h)
+        G = _components_in_band((dist(img, t['glyph']) < np.minimum(dist(img, bgl), 110)) & inside & V, img.shape[0] / 2, t['h'] * .4)
+        if _ink_box(G, by_rows=False) is None:
+            continue
+        title_jobs.append((i, t, ulo, vlo, G & V, V, _ink_box(G, by_rows=False)))
+    # titles: one typeface per size class, the closest face to the visible ink of all its lines
+    fits, like = face_table([(t['text'], G, V, box) for _, t, _, _, G, V, box in title_jobs], fonts)
+    for k, (i, t, ulo, vlo, G, V, box) in enumerate(title_jobs):
+        per_font = {ps: rs[k] for ps, rs in fits.items() if rs[k]}
+        if per_font:
+            pending.append((i, t, ulo, vlo, per_font, k))
+    # one typeface per title size class (designs repeat the same face): the closest face over the class
+    for _, t, ulo, vlo, per_font, _ in pending:
         t['_ink_h'] = max(v['box'][3] - v['box'][1] for v in per_font.values())
-    for i, t, ulo, vlo, per_font in pending:
-        peers = [pf for _, tt, _, _, pf in pending if .6 < tt['_ink_h'] / t['_ink_h'] < 1.6]
-        total = {k: sum(pf[k]['iou'] for pf in peers if k in pf) for k in per_font}
+    for i, t, ulo, vlo, per_font, _ in pending:
+        members = [k for _, tt, _, _, _, k in pending if .6 < tt['_ink_h'] / t['_ink_h'] < 1.6]
+        total = {ps: v for ps, v in face_choice(fits, like, members).items() if ps in per_font}
         fit = per_font[max(total, key=total.get)]
+        fit['font_match'] = font_match(fit['font'], total, 1)
         m = page_matrix(fit['m'], t['cx'], t['cy'], t['theta'], ulo, vlo)
         bx = fit['box']
         ink_h = bx[3] - bx[1]
@@ -1007,7 +1127,7 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
                     'color': [int(round(c)) for c in t['glyph']], 'frame': {'cx': round(t['cx'], 2), 'cy': round(t['cy'], 2),
                     'rotation_deg': round(-math.degrees(t['theta']), 2)}, 'box': [round(bx[0] + ulo, 2), round(bx[1] + vlo, 2),
                     round(bx[2] + ulo, 2), round(bx[3] + vlo, 2)], 'm': [round(v, 5) for v in m], 'iou': fit['iou'], 'tracking': fit['tracking'],
-                    'inferred': fit['text'] != t['text'] or any(fit['hidden_ends']),
+                    'inferred': fit['text'] != t['text'] or any(fit['hidden_ends']), 'font_match': fit['font_match'],
                     'shadow': scaled_shadow('title', ink_h)})
     out = [results[i] for i in order if i in results]
     for k, el in enumerate(out):

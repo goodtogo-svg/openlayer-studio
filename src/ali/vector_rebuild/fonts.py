@@ -2,6 +2,7 @@
 from pathlib import Path
 
 from fontTools.pens.boundsPen import BoundsPen
+from fontTools.pens.recordingPen import DecomposingRecordingPen
 from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
 
@@ -10,10 +11,13 @@ VARIABLE_WEIGHTS = {'Medium': 500, 'Bold': 700, 'Black': 900}
 
 
 class Font:
-    def __init__(self, path, postscript=None):
+    def __init__(self, path, postscript=None, number=0):
         self.path = str(path)
-        self.tt = TTFont(self.path)
+        self.number = number
+        self.tt = TTFont(self.path, fontNumber=number) if self.path.lower().endswith(('.ttc', '.otc')) else TTFont(self.path)
         self.postscript = postscript or self.tt['name'].getDebugName(6)
+        self.family = self.tt['name'].getDebugName(16) or self.tt['name'].getDebugName(1)
+        self.style = self.tt['name'].getDebugName(17) or self.tt['name'].getDebugName(2)
         self.upm = self.tt['head'].unitsPerEm
         self.cmap = self.tt.getBestCmap()
         self.glyphset = self.tt.getGlyphSet()
@@ -35,7 +39,10 @@ class Font:
             name = self.cmap.get(ord(ch))
             if name is None:
                 raise ValueError('%s has no glyph for %r' % (self.postscript, ch))
-            self.glyphset[name].draw(TransformPen(pen, (a * k, b * k, -c * k, -d * k, a * x + e, b * x + f)))
+            # composite glyphs (accents, some dashes) are flattened here: drawing pens need not resolve components
+            rec = DecomposingRecordingPen(self.glyphset)
+            self.glyphset[name].draw(rec)
+            rec.replay(TransformPen(pen, (a * k, b * k, -c * k, -d * k, a * x + e, b * x + f)))
             x += self.tt['hmtx'][name][0] * k + tracking * size
         return x
 
@@ -83,5 +90,65 @@ def load_candidates(config, cache_dir):
                 path = instance_variable(item['variable'], weight, cache_dir)
                 fonts.append(Font(path))
         else:
-            fonts.append(Font(item['file'], item.get('postscript')))
+            fonts.extend(_file_fonts(item['file'], item.get('postscript'), item.get('number')))
     return fonts
+
+
+def _file_fonts(path, postscript=None, number=None):
+    """Every face of a font file (.ttc/.otc collections hold several), or the one numbered."""
+    if str(path).lower().endswith(('.ttc', '.otc')):
+        from fontTools.ttLib import TTCollection
+        count = len(TTCollection(str(path)).fonts)
+        return [Font(path, postscript if number is not None else None, k) for k in ([number] if number is not None else range(count))]
+    return [Font(path, postscript)]
+
+
+def font_pool(folder):
+    """Candidate faces from every .ttf/.otf/.ttc in folder (the machine's installed fonts, copied), heavy sans first is up to the caller."""
+    faces, seen = [], set()
+    for f in sorted(Path(folder).iterdir()):
+        if f.suffix.lower() not in ('.ttf', '.otf', '.ttc', '.otc'):
+            continue
+        try:
+            for face in _file_fonts(f):
+                if face.postscript in seen or 'glyf' not in face.tt and 'CFF ' not in face.tt and 'CFF2' not in face.tt:
+                    continue
+                seen.add(face.postscript)
+                faces.append(face)
+        except Exception:
+            continue
+    return faces
+
+
+def installed_names(path):
+    """PostScript names the target app can set: a JSON list of names or of {"name": ...} records (Illustrator's
+    app.textFonts), or one name per line."""
+    import json
+    text = Path(path).read_text(encoding='utf-8-sig')
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return {l.strip() for l in text.splitlines() if l.strip()}
+    return {d['name'] if isinstance(d, dict) else str(d) for d in data}
+
+
+def pool_candidates(folders, names_file=None, exclude=()):
+    """Upright Latin faces from the folders, limited to the faces the target app has (a face it cannot set would be
+    substituted on open). Every face is a candidate for the closest match; none is assumed to be the source font."""
+    allowed = installed_names(names_file) if names_file else None
+    out, seen = [], set(exclude)
+    for folder in folders:
+        for f in font_pool(folder):
+            if f.postscript in seen or (allowed is not None and f.postscript not in allowed):
+                continue
+            if not f.covers('ABCDEFGHIJKLMNOPQRSTUVWXYZ') or f.is_cjk or _sloped(f):
+                continue
+            seen.add(f.postscript)
+            out.append(f)
+    return out
+
+
+def _sloped(f):
+    import re
+    name = ('%s %s' % (f.postscript, f.style or '')).lower()
+    return bool(f.tt['OS/2'].fsSelection & 1) or bool(re.search(r'ital|oblique|slant|kursiv', name))

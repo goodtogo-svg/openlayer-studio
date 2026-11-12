@@ -227,6 +227,16 @@ def extend_hidden_ends(spec, src, fonts, log=print):
         ref = np.array(fill['color'] if fill['type'] == 'flat' else fill['stops'][2][1], np.float32)
         chroma = ref / (ref.sum() + 1)
         ink = np.array(el['texts'][0]['color'], np.float32) if el.get('texts') else None
+        # an occluding title rebuilt in the closest installed face is not the source face, so its letters sit a little
+        # off the source letters: source ink of that title's colour near its letters hides the plate too
+        k = max(3, int(h * .1)) | 1
+        hidden = cv2.dilate((cover[i] > .5).astype(np.uint8), np.ones((k, k), np.uint8)).astype(bool)
+        k2 = max(5, int(h * .4)) | 1
+        for j in range(i + 1, len(spec['elements'])):
+            ej = spec['elements'][j]
+            if ej['kind'] == 'title':
+                near = cv2.dilate((L[j]['body'] > .5).astype(np.uint8), np.ones((k2, k2), np.uint8)).astype(bool)
+                hidden |= near & (dist(src.astype(np.float32), np.array(ej['color'], np.float32)) < 40)
         lo, hi = -w / 2, w / 2
         for side in (-1, 1):
             end = side * w / 2
@@ -246,7 +256,7 @@ def extend_hidden_ends(spec, src, fonts, log=print):
                         like += 1
                     elif ink is not None and (dist(c, ink) < 60 or _seg_dist(c, ink, ref) < 35 or _seg_dist(c, ink, ref * .55) < 35):
                         lettering += 1   # lettering and its anti-aliased edge on the plate
-                    elif cover[i][yi, xi] > .5:
+                    elif hidden[yi, xi]:
                         hid += 1
                 if n < 5:
                     break

@@ -48,7 +48,7 @@ def parse_font_args(values, root):
     return out
 
 
-def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600, method='auto'):
+def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600, method='auto', font_pool=None, font_names=None):
     from ..runtime import ROOT, digest
     source = Path(source).expanduser().resolve()
     out = Path(out).resolve()
@@ -66,7 +66,9 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
     out.mkdir(parents=True, exist_ok=True)
     request = {'schema': 'ali-vector-rebuild/1', 'source': str(source), 'source_sha256': digest(source), 'out': str(out),
                'locale': locale, 'fonts': parse_font_args(fonts, ROOT), 'pt_per_px': pt_per_px,
-               'ocr_python': str(ocr_python), 'method': method}
+               'ocr_python': str(ocr_python), 'method': method,
+               'font_pool': [str(Path(d).expanduser().resolve()) for d in (font_pool or [])],
+               'font_names': str(Path(font_names).expanduser().resolve()) if font_names else None}
     (out / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2))
     env = os.environ.copy()
     env.update(PYTHONPATH=str(ROOT / 'src'), PYTHONDONTWRITEBYTECODE='1', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK='True',
@@ -116,8 +118,11 @@ def worker(request_path):
     method = req.get('method', 'auto')
     if method in ('auto', 'scene'):
         from . import scene, scene_build
-        from .fonts import load_candidates
+        from .fonts import load_candidates, pool_candidates
         fonts = load_candidates(req['fonts'], out / 'work' / 'fonts')
+        if req.get('font_pool'):
+            fonts += pool_candidates(req['font_pool'], req.get('font_names'), exclude={f.postscript for f in fonts})
+            print('fonts: %d candidate faces (closest face per line group)' % len(fonts), flush=True)
         spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
         pdf = scene_build.build(spec, fonts, out, log=lambda s: print(s, flush=True))
         mae, _ = scene_build.score(pdf, src)
