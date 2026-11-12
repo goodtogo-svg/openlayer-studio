@@ -251,7 +251,7 @@ def illustrator_script(spec, fonts, assets):
     W, H = spec['size']
     lines = [JSX_HEAD % {'H': H, 'W': W}]
     body = ["try{app.userInteractionLevel=UserInteractionLevel.DONTDISPLAYALERTS;if(File(root+'/scene-native.ai').exists)throw Error('Refusing overwrite');",
-            "doc=app.documents.add(DocumentColorSpace.RGB,W,H);"]
+            "doc=app.documents.add(DocumentColorSpace.RGB,W,H);var defaultLayer=doc.layers[0];"]
     bg = spec['background']
     stops = json.dumps([[s[0], s[1]] for s in bg['stops']])
     if bg['type'] == 'radial':
@@ -304,11 +304,12 @@ def illustrator_script(spec, fonts, assets):
         for a in by_el.get(k, []):
             if a['role'] == 'material':
                 body.append("var mg=L.groupItems.add();mg.name='MATERIAL';place(mg,%s,%d,%d,'Material');mg.move(g,ElementPlacement.PLACEBEFORE);"
-                            "var tf=g.textFrames;for(var i=0;i<tf.length;i++)tf[i].move(mg,ElementPlacement.PLACEBEFORE);" % (json.dumps(a['file']), a['x'], a['y']))
+                            "while(g.textFrames.length)g.textFrames[g.textFrames.length-1].move(mg,ElementPlacement.PLACEBEFORE);" % (json.dumps(a['file']), a['x'], a['y']))
         for a in by_el.get(k, []):
             if a['role'] == 'shadow':
                 body.append("var sg=L.groupItems.add();sg.name='SHADOW';place(sg,%s,%d,%d,'Soft shadow');sg.move(L,ElementPlacement.PLACEATEND);" % (
                     json.dumps(a['file']), a['x'], a['y']))
+    body.append("if(defaultLayer.pageItems.length==0&&doc.layers.length>1)defaultLayer.remove();")
     body.append("var o=new IllustratorSaveOptions();o.pdfCompatible=true;doc.saveAs(File(root+'/scene-native.ai'),o);"
                 "var ex=new ExportOptionsPNG24();ex.artBoardClipping=true;ex.horizontalScale=100;ex.verticalScale=100;ex.transparency=false;"
                 "doc.exportFile(File(root+'/proof-native'),ExportType.PNG24,ex);"

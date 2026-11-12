@@ -115,12 +115,14 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
     # Illustrator matches fonts by PostScript name.
     names = {f.tt['name'].getDebugName(4): f.postscript for f in fonts}
     names.update({f.tt['name'].getDebugName(6): f.postscript for f in fonts})
+    # Some fonts (e.g. Impact) are embedded as "<family> <subfamily>", which Illustrator cannot match.
+    names.update({'%s %s' % (f.tt['name'].getDebugName(1), f.tt['name'].getDebugName(2)): f.postscript for f in fonts})
     for x in range(1, doc.xref_length()):
         for key in ('BaseFont', 'FontName'):
             t, v = doc.xref_get_key(x, key)
             if t != 'name':
                 continue
-            raw = v.lstrip('/')
+            raw = v.lstrip('/').replace('#20', ' ')
             tag, _, base = raw.rpartition('+')
             for full, ps in names.items():
                 if full and base.replace(' ', '') == full.replace(' ', ''):
