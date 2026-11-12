@@ -127,19 +127,66 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
             for full, ps in names.items():
                 if full and base.replace(' ', '') == full.replace(' ', ''):
                     doc.xref_set_key(x, key, '/' + (tag + '+' if tag else '') + ps)
-    # Adobe Fonts faces: the cloud only has a layout proxy, which must not be shipped under the Adobe name.
-    # Leave them unembedded so Illustrator activates (or substitutes) the real face by name.
-    adobe = {f.postscript for f in fonts if getattr(f, 'adobe', None)}
+    adobe = [f for f in fonts if getattr(f, 'adobe', None)]
     if adobe:
         # what the cloud can render: proxy outlines in place of the Adobe faces (cloud preview and scoring only)
-        doc.save(work_dir / 'layout-proxy.pdf', garbage=4, deflate=True)
-        for x in range(1, doc.xref_length()):
-            for key in ('BaseFont', 'FontName'):
-                t, v = doc.xref_get_key(x, key)
-                if t == 'name' and v.lstrip('/').rpartition('+')[2] in adobe:
-                    doc.xref_set_key(x, key, '/' + v.lstrip('/').rpartition('+')[2])
-            for key in ('FontFile', 'FontFile2', 'FontFile3', 'CIDSet'):
-                if doc.xref_get_key(x, 'FontName')[1].lstrip('/') in adobe and doc.xref_get_key(x, key)[0] != 'null':
-                    doc.xref_set_key(x, key, 'null')
+        proxy_pdf = work_dir / 'layout-proxy.pdf'
+        doc.save(proxy_pdf, garbage=4, deflate=True)
+        doc.close()
+        doc = pymupdf.open(proxy_pdf)
+        _name_only(doc, adobe)
     doc.save(out_pdf, garbage=4, deflate=True)
     doc.close()
+
+
+def _name_only(doc, adobe_fonts):
+    """Turn each Adobe Fonts face from an embedded Identity-H font (glyph ids of the layout proxy, which would map to
+    the wrong glyphs of the real face) into a plain, unembedded TrueType font with WinAnsi character codes, so the
+    app that opens the file finds the face by name and maps the characters itself."""
+    import pymupdf
+    by_ps = {f.postscript: f for f in adobe_fonts}
+    page = doc[0]
+    for xref, _, _, base, res, _ in page.get_fonts():
+        f = by_ps.get(base.rpartition('+')[2])
+        if f is None:
+            continue
+        gid_char = {}
+        for code, name in f.cmap.items():
+            gid_char.setdefault(f.tt.getGlyphID(name), chr(code))
+        k = 1000 / f.upm
+        widths = []
+        for c in range(32, 256):
+            ch = bytes([c]).decode('cp1252', errors='ignore')
+            name = f.cmap.get(ord(ch)) if ch else None
+            widths.append(round(f.tt['hmtx'][name][0] * k) if name else 0)
+        head, os2 = f.tt['head'], f.tt['OS/2']
+        desc = doc.get_new_xref()
+        doc.update_object(desc, '<< /Type /FontDescriptor /FontName /%s /Flags 32 /FontBBox [%d %d %d %d] /ItalicAngle 0 '
+                                '/Ascent %d /Descent %d /CapHeight %d /StemV 120 >>' % (
+                                    f.postscript, head.xMin * k, head.yMin * k, head.xMax * k, head.yMax * k,
+                                    os2.sTypoAscender * k, os2.sTypoDescender * k, getattr(os2, 'sCapHeight', 700) * k))
+        doc.update_object(xref, '<< /Type /Font /Subtype /TrueType /BaseFont /%s /FirstChar 32 /LastChar 255 /Widths [%s] '
+                                '/Encoding /WinAnsiEncoding /FontDescriptor %d 0 R >>' % (
+                                    f.postscript, ' '.join(map(str, widths)), desc))
+
+        def recode(m):
+            h = m.group(1)
+            out = ''
+            for i in range(0, len(h), 4):
+                ch = gid_char.get(int(h[i:i + 4], 16), '?')
+                out += ch.encode('cp1252', errors='replace').hex()
+            return '<%s>' % out
+
+        tag = '/%s ' % res
+        for cx in page.get_contents():
+            st = doc.xref_stream(cx).decode('latin-1')
+            if tag not in st:
+                continue
+            parts = re.split(r'(/\S+ [\d.]+ Tf)', st)
+            cur = None
+            for i, part in enumerate(parts):
+                if re.fullmatch(r'/\S+ [\d.]+ Tf', part):
+                    cur = part.split()[0]
+                elif cur == '/' + res:
+                    parts[i] = re.sub(r'<([0-9a-fA-F]+)>', recode, part)
+            doc.update_stream(cx, ''.join(parts).encode('latin-1'))

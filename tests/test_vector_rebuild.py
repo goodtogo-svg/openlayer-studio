@@ -226,7 +226,8 @@ def test_adobe_fonts_face_is_named_not_embedded(tmp_path):
     write_pdf([('<svg xmlns="http://www.w3.org/2000/svg" width="220" height="60"></svg>', [frame])], fonts, (220, 60),
               tmp_path / 'scene.pdf', work)
     with pymupdf.open(tmp_path / 'scene.pdf') as d:
-        assert [(f[3], f[1]) for f in d[0].get_fonts()] == [('EurostileCon-Hea', 'n/a')]   # named, no font file
+        assert [(f[3], f[1], f[5]) for f in d[0].get_fonts()] == [('EurostileCon-Hea', 'n/a', 'WinAnsiEncoding')]  # named, no file
+        assert d[0].get_text().strip() == 'TAPE'     # character codes, not proxy glyph ids, so the real face maps them
     with pymupdf.open(work / 'layout-proxy.pdf') as d:
         assert d[0].get_fonts()[0][1] != 'n/a'                                                # cloud preview keeps the proxy
     report = ship_fonts(['EurostileCon-Hea'], fonts, tmp_path)
