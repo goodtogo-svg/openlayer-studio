@@ -833,8 +833,13 @@ function importPage(page,layer){
  var src=app.open(File(ROOT.fsName+"/"+IR.source_copy));
  try{
   app.coordinateSystem=CoordinateSystem.DOCUMENTCOORDINATESYSTEM;
-  var r=src.artboards[0].artboardRect;var dx=page.artboard[0]-r[0],dy=page.artboard[1]-r[1];
   for(var i=0;i<src.layers.length;i++)unlockAll(src.layers[i]);
+  // duplicate() between documents keeps canvas position, not ruler coordinates, so measure the real offset
+  // with a 1pt marker at the source artboard's top-left corner.
+  var r=src.artboards[0].artboardRect;
+  var marker=src.layers[0].pathItems.rectangle(r[1],r[0],1,1);
+  var probe=marker.duplicate(layer,ElementPlacement.PLACEATEND);marker.remove();
+  var g=probe.geometricBounds;var dx=page.artboard[0]-g[0],dy=page.artboard[1]-g[1];probe.remove();
   for(var i=src.layers.length-1;i>=0;i--)copyLayer(src.layers[i],layer,dx,dy);
  }finally{src.close(SaveOptions.DONOTSAVECHANGES);app.activeDocument=doc;app.coordinateSystem=CoordinateSystem.DOCUMENTCOORDINATESYSTEM;}
 }
