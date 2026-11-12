@@ -130,3 +130,14 @@ Codex 專案 Skill 位於 `.agents/skills/openlayer-studio/SKILL.md`。Scene Gra
 ## 文章編輯稿：使用 story 與欄位串接
 
 文章不能以每一行獨立文字框交付。使用 `ali article-rebuild`，一篇文章一個 story，按欄位串接，段落內自動換行。參考 [文章串接流程](docs/article-flow-zh-TW.md)；舊 `pdf-rebuild` 的逐 span 模式保留作診斷用途。
+
+## PDF 轉 Illustrator 原生 .ai（`ali pdf-ai`）
+
+```bash
+ali pdf-ai input.pdf --out jobs/new-ai-job            # 預設引擎 illustrator-import
+ali pdf-ai input.pdf --out jobs/new-ai-job-ir --engine ir
+# 在 Illustrator 執行 build-illustrator.jsx，再執行 verify-illustrator.jsx
+ali pdf-ai-verify jobs/new-ai-job                     # 對照原 PDF 的逐頁像素比較
+```
+
+每頁一個畫板與圖層；文字依字型是否安裝決定為可編輯文字或內嵌字型外框，不會靜默換字型。詳見 [PDF 轉 AI 編譯器](docs/pdf-to-ai-zh-TW.md)。
