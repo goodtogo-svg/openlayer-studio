@@ -152,3 +152,46 @@ def _sloped(f):
     import re
     name = ('%s %s' % (f.postscript, f.style or '')).lower()
     return bool(f.tt['OS/2'].fsSelection & 1) or bool(re.search(r'ital|oblique|slant|kursiv', name))
+
+
+FREE_LICENCE = ('SIL Open Font License', 'Apache License', 'OFL')
+
+
+def licence_file(font):
+    """The licence text that came with a pool face (OFL.txt, LICENSE*, <Family>.LICENSE.txt), if any."""
+    p = Path(font.path)
+    stem = p.stem.split('_')[0].split('-')[0].lower()
+    for c in sorted(p.parent.iterdir()):
+        n = c.name.lower()
+        if c.suffix.lower() in ('.txt', '') and ('licen' in n or n.startswith('ofl')) and (n.startswith(stem) or n in ('ofl.txt', 'license.txt')):
+            return c
+    return None
+
+
+def ship_fonts(postscripts, fonts, out_dir):
+    """Copy the faces a build uses, with their licence, into out_dir/fonts when the licence allows it (OFL, Apache),
+    so whoever opens the .ai can install them. Faces without such a licence are listed, not copied."""
+    import json
+    import shutil
+    by_ps = {f.postscript: f for f in fonts}
+    dest = Path(out_dir) / 'fonts'
+    report = {'shipped': [], 'not_shipped': []}
+    for ps in sorted(set(postscripts)):
+        f = by_ps.get(ps)
+        lic = licence_file(f) if f else None
+        text = lic.read_text(errors='ignore') if lic else ''
+        if f and any(k in text for k in FREE_LICENCE):
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(f.path, dest / Path(f.path).name)
+            shutil.copy2(lic, dest / lic.name)
+            report['shipped'].append({'postscript': ps, 'file': Path(f.path).name, 'licence': lic.name})
+        else:
+            report['not_shipped'].append({'postscript': ps, 'reason': 'no free licence found with the font file'})
+    if report['shipped'] or report['not_shipped']:
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / 'fonts.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
+        (dest / 'README-zh-TW.txt').write_text(
+            '開啟 scene.ai 前，請先安裝本資料夾內的字型（雙擊字型檔 > 安裝）。\n'
+            '這些字型採 SIL Open Font License 或 Apache License，授權條款與字型放在一起。\n'
+            '未附上的字型列在 fonts.json 的 not_shipped，請改用 Adobe Fonts 或自行取得授權。\n', encoding='utf-8')
+    return report

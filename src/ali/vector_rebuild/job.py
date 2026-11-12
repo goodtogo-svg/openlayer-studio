@@ -125,6 +125,11 @@ def worker(request_path):
             print('fonts: %d candidate faces (closest face per line group)' % len(fonts), flush=True)
         spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
         pdf = scene_build.build(spec, fonts, out, log=lambda s: print(s, flush=True))
+        if req.get('font_pool'):
+            from .fonts import ship_fonts
+            used = [fr['font'] for e in spec['elements'] for fr in scene_build.text_frames(e, fonts)]
+            shipped = ship_fonts(used, fonts, out)
+            print('fonts: shipped %d, not shipped %d' % (len(shipped['shipped']), len(shipped['not_shipped'])), flush=True)
         mae, _ = scene_build.score(pdf, src)
         print('scene: mean abs error %.2f' % mae, flush=True)
         if method == 'scene' or mae <= SCENE_MAX_MAE:

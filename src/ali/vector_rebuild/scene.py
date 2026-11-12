@@ -671,7 +671,7 @@ def _score(font, text, box, G, V, tracking=0.0):
 
 
 TRACKINGS = (0.0, .03, .06, .1, .15)
-TIE_IOU = .05
+TIE_IOU = .08   # a hidden letter shows only through its advance width, which a substitute face does not share
 CONTEXT = {'words': set()}
 
 
@@ -804,13 +804,22 @@ def shortlist(text, G, V, fonts, box, k=None):
     return [f for _, _, f in ranked[:k]]
 
 
-def font_match(font, total, n):
+FREE_FACE_MIN = .75   # letter likeness below this: no shipped face is close; propose an Adobe Fonts face for review
+
+
+def glyph_mean(like, ps, members):
+    vals = [like[ps][k] for k in members if like.get(ps) and like[ps][k] is not None]
+    return round(sum(vals) / len(vals), 3) if vals else None
+
+
+def font_match(font, total, n, likeness=None):
     """What the choice of face rests on: its mean fit and the runners-up (the source font is unknown, so every
     choice is the closest installed face, not an identification)."""
     ranked = sorted(total.items(), key=lambda kv: -kv[1])
     return {'postscript': font.postscript, 'family': getattr(font, 'family', None), 'style': getattr(font, 'style', None),
             'score': round(total[font.postscript] / max(n, 1), 3), 'candidates': len(total),
-            'runners_up': [[k, round(v / max(n, 1), 3)] for k, v in ranked if k != font.postscript][:3]}
+            'runners_up': [[k, round(v / max(n, 1), 3)] for k, v in ranked if k != font.postscript][:3],
+            'letter_likeness': likeness, 'close_enough': None if likeness is None else likeness >= FREE_FACE_MIN}
 
 
 def face_table(jobs, fonts):
@@ -857,7 +866,7 @@ def agree_font(jobs, fonts, log=print, what='lines'):
     fits, like = face_table(jobs, fonts)
     total = face_choice(fits, like, list(range(len(jobs))))
     best = max(total, key=total.get)
-    match = font_match(next(f for f in fonts if f.postscript == best), total, 1)
+    match = font_match(next(f for f in fonts if f.postscript == best), total, 1, glyph_mean(like, best, range(len(jobs))))
     log('scene: %s face %s (score %.3f; next %s)' % (what, best, match['score'], match['runners_up'][:2]))
     out = []
     for k, r in enumerate(fits[best]):
@@ -1119,7 +1128,7 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
         members = [k for _, tt, _, _, _, k in pending if .6 < tt['_ink_h'] / t['_ink_h'] < 1.6]
         total = {ps: v for ps, v in face_choice(fits, like, members).items() if ps in per_font}
         fit = per_font[max(total, key=total.get)]
-        fit['font_match'] = font_match(fit['font'], total, 1)
+        fit['font_match'] = font_match(fit['font'], total, 1, glyph_mean(like, fit['font'].postscript, members))
         m = page_matrix(fit['m'], t['cx'], t['cy'], t['theta'], ulo, vlo)
         bx = fit['box']
         ink_h = bx[3] - bx[1]
