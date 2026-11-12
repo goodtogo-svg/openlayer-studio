@@ -13,6 +13,7 @@ VARIABLE_WEIGHTS = {'Medium': 500, 'Bold': 700, 'Black': 900}
 class Font:
     def __init__(self, path, postscript=None, number=0):
         self.path = str(path)
+        self.adobe = None  # set by adobe_substitutes: drawn with this file, named and left unembedded as an Adobe Fonts face
         self.number = number
         self.tt = TTFont(self.path, fontNumber=number) if self.path.lower().endswith(('.ttc', '.otc')) else TTFont(self.path)
         self.postscript = postscript or self.tt['name'].getDebugName(6)
@@ -178,6 +179,9 @@ def ship_fonts(postscripts, fonts, out_dir):
     report = {'shipped': [], 'not_shipped': []}
     for ps in sorted(set(postscripts)):
         f = by_ps.get(ps)
+        if f is not None and f.adobe:
+            report.setdefault('adobe_fonts', []).append({k: f.adobe.get(k) for k in ('postscript', 'family', 'style', 'url')})
+            continue
         lic = licence_file(f) if f else None
         text = lic.read_text(errors='ignore') if lic else ''
         if f and any(k in text for k in FREE_LICENCE):
@@ -187,11 +191,68 @@ def ship_fonts(postscripts, fonts, out_dir):
             report['shipped'].append({'postscript': ps, 'file': Path(f.path).name, 'licence': lic.name})
         else:
             report['not_shipped'].append({'postscript': ps, 'reason': 'no free licence found with the font file'})
-    if report['shipped'] or report['not_shipped']:
+    if report['shipped'] or report['not_shipped'] or report.get('adobe_fonts'):
         dest.mkdir(parents=True, exist_ok=True)
         (dest / 'fonts.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
         (dest / 'README-zh-TW.txt').write_text(
             '開啟 scene.ai 前，請先安裝本資料夾內的字型（雙擊字型檔 > 安裝）。\n'
             '這些字型採 SIL Open Font License 或 Apache License，授權條款與字型放在一起。\n'
-            '未附上的字型列在 fonts.json 的 not_shipped，請改用 Adobe Fonts 或自行取得授權。\n', encoding='utf-8')
+            '未附上的字型列在 fonts.json 的 not_shipped，請改用 Adobe Fonts 或自行取得授權。\n'
+            + ''.join('%s %s 來自 Adobe Fonts（%s）：有 Creative Cloud 的 Illustrator 開檔時會自動啟用，或先到該網址啟用。\n'
+                      % (a.get('family') or a['postscript'], a.get('style') or '', a.get('url') or 'fonts.adobe.com')
+                      for a in report.get('adobe_fonts', [])), encoding='utf-8')
     return report
+
+
+def load_adobe_fonts(path):
+    """Adobe Fonts faces to use instead of a free face family: JSON list of
+    {"postscript", "family", "style", "url", "replaces_family"}. The cloud has no Adobe outlines, so the replaced
+    free face stays the layout proxy; Illustrator activates the Adobe face when the client opens the file."""
+    import json
+    rows = json.loads(Path(path).read_text())
+    for r in rows:
+        missing = {'postscript', 'replaces_family'} - set(r)
+        if missing:
+            raise ValueError('adobe font entry %r lacks %s' % (r, ', '.join(sorted(missing))))
+    return rows
+
+
+def adobe_substitutes(spec, fonts, adobe_rows):
+    """Rename the faces of replaced families to their Adobe Fonts face in spec (in place). Returns the proxy Font
+    objects added to fonts, one per Adobe face used."""
+    by_ps = {f.postscript: f for f in fonts}
+    by_family = {r['replaces_family'].lower(): r for r in adobe_rows}
+    added = {}
+
+    def swap(ps):
+        f = by_ps.get(ps)
+        row = by_family.get((f.family or '').lower()) if f else None
+        if not row:
+            return ps
+        if row['postscript'] not in added:
+            proxy = Font(f.path, number=f.number)
+            proxy.postscript = row['postscript']
+            proxy.adobe = dict(row, proxy=f.postscript)
+            added[row['postscript']] = proxy
+        return row['postscript']
+
+    def walk(node):
+        if isinstance(node, dict):
+            if 'font_match' in node and isinstance(node['font_match'], dict):
+                m = node['font_match']
+                new = swap(m.get('postscript'))
+                if new != m.get('postscript'):
+                    row = added[new].adobe
+                    node['font_match'] = dict(m, postscript=new, family=row.get('family'), style=row.get('style'),
+                                              source='adobe_fonts', url=row.get('url'), layout_proxy=m.get('postscript'))
+            for k, v in node.items():
+                if k == 'font' and isinstance(v, str):
+                    node[k] = swap(v)
+                elif k != 'font_match':
+                    walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+    walk(spec)
+    fonts.extend(added.values())
+    return list(added.values())

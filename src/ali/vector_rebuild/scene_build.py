@@ -319,8 +319,15 @@ def illustrator_script(spec, fonts, assets):
     return s.replace("'RADIAL_PLACEHOLDER'", 'GradientType.RADIAL').replace("'LINEAR_PLACEHOLDER'", 'GradientType.LINEAR')
 
 
+def preview_pdf(pdf):
+    """The PDF the cloud can render: scene.pdf, or its layout-proxy copy when Adobe Fonts faces are left unembedded."""
+    proxy = Path(pdf).parent / 'work' / 'layout-proxy.pdf'
+    return proxy if proxy.exists() else Path(pdf)
+
+
 def score(pdf, src):
     import pymupdf
+    pdf = preview_pdf(pdf)
     H, W = src.shape[:2]
     with pymupdf.open(pdf) as d:
         pix = d[0].get_pixmap(matrix=pymupdf.Matrix(W / d[0].rect.width, H / d[0].rect.height), alpha=False)

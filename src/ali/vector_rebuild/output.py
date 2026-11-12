@@ -127,5 +127,19 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
             for full, ps in names.items():
                 if full and base.replace(' ', '') == full.replace(' ', ''):
                     doc.xref_set_key(x, key, '/' + (tag + '+' if tag else '') + ps)
+    # Adobe Fonts faces: the cloud only has a layout proxy, which must not be shipped under the Adobe name.
+    # Leave them unembedded so Illustrator activates (or substitutes) the real face by name.
+    adobe = {f.postscript for f in fonts if getattr(f, 'adobe', None)}
+    if adobe:
+        # what the cloud can render: proxy outlines in place of the Adobe faces (cloud preview and scoring only)
+        doc.save(work_dir / 'layout-proxy.pdf', garbage=4, deflate=True)
+        for x in range(1, doc.xref_length()):
+            for key in ('BaseFont', 'FontName'):
+                t, v = doc.xref_get_key(x, key)
+                if t == 'name' and v.lstrip('/').rpartition('+')[2] in adobe:
+                    doc.xref_set_key(x, key, '/' + v.lstrip('/').rpartition('+')[2])
+            for key in ('FontFile', 'FontFile2', 'FontFile3', 'CIDSet'):
+                if doc.xref_get_key(x, 'FontName')[1].lstrip('/') in adobe and doc.xref_get_key(x, key)[0] != 'null':
+                    doc.xref_set_key(x, key, 'null')
     doc.save(out_pdf, garbage=4, deflate=True)
     doc.close()

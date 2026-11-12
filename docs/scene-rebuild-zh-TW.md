@@ -64,6 +64,20 @@
 
 字型庫只放在工作資料夾，不進版本庫。
 
+### Adobe Fonts 字型（`--adobe-fonts`）
+
+最接近的字型若只在 Adobe Fonts 上（例如 Square721 的同源設計 Eurostile Cond），用 JSON 指定「哪個免費字族換成哪款 Adobe Fonts 字型」：
+
+```json
+[{"postscript": "EurostileCon-Hea", "family": "Eurostile Cond", "style": "Heavy",
+  "url": "https://fonts.adobe.com/fonts/eurostile-condensed", "replaces_family": "Saira Condensed"}]
+```
+
+- 雲端沒有 Adobe Fonts 的字形，所以排版仍用被取代的免費字型量尺寸（版面代用字型）。
+- `scene.pdf` / `scene.ai` 只寫 Adobe 字型名稱，不夾帶任何字型檔；Illustrator 開檔時自動啟用（需 Creative Cloud）。
+- 雲端預覽與評分改用 `work/layout-proxy.pdf`（代用字型版）。`fonts/fonts.json` 的 `adobe_fonts` 列出要啟用的字型與網址。
+- 代用字型與 Adobe 字型的字寬不同，必須在 Illustrator 開檔確認；`native/build-illustrator.jsx` 可用真正的字型重新貼合。
+
 ## 5. 已知限制
 
 - 完全被遮住的字母只能靠字典與詞頻推測（例如 FON? POWER 可能推成 FOND 而非 FONT），一律標記 `inferred`，需人工確認。

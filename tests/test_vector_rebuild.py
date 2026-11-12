@@ -199,3 +199,35 @@ def test_closest_face_by_letter_shapes(tmp_path):
     assert installed_names(names) == {faces[1].postscript}
     picked = pool_candidates([str(LIB.parent)], str(names))
     assert {f.postscript for f in picked} <= {faces[1].postscript}
+
+
+def test_adobe_fonts_face_is_named_not_embedded(tmp_path):
+    """A free face family can be replaced by an Adobe Fonts face: the free face lays the text out, the PDF names the
+    Adobe face without embedding any outlines under that name, and the font report points to Adobe Fonts."""
+    import pymupdf
+    from ali.vector_rebuild.fonts import Font, adobe_substitutes, ship_fonts
+    from ali.vector_rebuild.output import write_pdf
+    from ali.vector_rebuild.text import fit_matrix
+    if not LIB.is_file():
+        pytest.skip('needs Liberation Sans Bold')
+    fonts = [Font(LIB)]
+    spec = {'elements': [{'kind': 'plate', 'texts': [{'text': 'TAPE', 'font': fonts[0].postscript,
+                                                      'font_match': {'postscript': fonts[0].postscript, 'score': .8}}]}]}
+    rows = [{'postscript': 'EurostileCon-Hea', 'family': 'Eurostile Cond', 'style': 'Heavy',
+             'url': 'https://fonts.adobe.com/fonts/eurostile-condensed', 'replaces_family': fonts[0].family}]
+    added = adobe_substitutes(spec, fonts, rows)
+    t = spec['elements'][0]['texts'][0]
+    assert [f.postscript for f in added] == ['EurostileCon-Hea'] and t['font'] == 'EurostileCon-Hea'
+    assert t['font_match']['source'] == 'adobe_fonts' and t['font_match']['layout_proxy'] == fonts[0].postscript
+    m = fit_matrix(added[0], 'TAPE', (10, 10, 200, 40), 0, 0)
+    frame = {'name': 'T', 'text': 'TAPE', 'font': 'EurostileCon-Hea', 'm': m, 'tracking': 0, 'fill': '#000000'}
+    work = tmp_path / 'work'
+    work.mkdir()
+    write_pdf([('<svg xmlns="http://www.w3.org/2000/svg" width="220" height="60"></svg>', [frame])], fonts, (220, 60),
+              tmp_path / 'scene.pdf', work)
+    with pymupdf.open(tmp_path / 'scene.pdf') as d:
+        assert [(f[3], f[1]) for f in d[0].get_fonts()] == [('EurostileCon-Hea', 'n/a')]   # named, no font file
+    with pymupdf.open(work / 'layout-proxy.pdf') as d:
+        assert d[0].get_fonts()[0][1] != 'n/a'                                                # cloud preview keeps the proxy
+    report = ship_fonts(['EurostileCon-Hea'], fonts, tmp_path)
+    assert report['adobe_fonts'][0]['url'].startswith('https://fonts.adobe.com') and not report['shipped']

@@ -48,7 +48,8 @@ def parse_font_args(values, root):
     return out
 
 
-def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600, method='auto', font_pool=None, font_names=None):
+def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600, method='auto', font_pool=None, font_names=None,
+            adobe_fonts=None):
     from ..runtime import ROOT, digest
     source = Path(source).expanduser().resolve()
     out = Path(out).resolve()
@@ -68,7 +69,8 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
                'locale': locale, 'fonts': parse_font_args(fonts, ROOT), 'pt_per_px': pt_per_px,
                'ocr_python': str(ocr_python), 'method': method,
                'font_pool': [str(Path(d).expanduser().resolve()) for d in (font_pool or [])],
-               'font_names': str(Path(font_names).expanduser().resolve()) if font_names else None}
+               'font_names': str(Path(font_names).expanduser().resolve()) if font_names else None,
+               'adobe_fonts': str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts else None}
     (out / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2))
     env = os.environ.copy()
     env.update(PYTHONPATH=str(ROOT / 'src'), PYTHONDONTWRITEBYTECODE='1', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK='True',
@@ -124,8 +126,12 @@ def worker(request_path):
             fonts += pool_candidates(req['font_pool'], req.get('font_names'), exclude={f.postscript for f in fonts})
             print('fonts: %d candidate faces (closest face per line group)' % len(fonts), flush=True)
         spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
+        if req.get('adobe_fonts'):
+            from .fonts import adobe_substitutes, load_adobe_fonts
+            for f in adobe_substitutes(spec, fonts, load_adobe_fonts(req['adobe_fonts'])):
+                print('fonts: %s laid out with %s, left for Adobe Fonts activation' % (f.postscript, f.adobe['proxy']), flush=True)
         pdf = scene_build.build(spec, fonts, out, log=lambda s: print(s, flush=True))
-        if req.get('font_pool'):
+        if req.get('font_pool') or req.get('adobe_fonts'):
             from .fonts import ship_fonts
             used = [fr['font'] for e in spec['elements'] for fr in scene_build.text_frames(e, fonts)]
             shipped = ship_fonts(used, fonts, out)
