@@ -156,3 +156,21 @@ def test_word_candidates_cover_hidden_letters():
     assert 'LEVELS' in word_candidates('LLS')
     assert 'EVERY DETAIL' in word_candidates('EVERYDETAIL')
     assert word_candidates('TAPES') == []
+
+
+def test_scene_refine_helpers():
+    import numpy as np
+    from ali.vector_rebuild import scene, scene_refine
+    # a pixel on the blend between ink and plate counts as lettering, a far one does not
+    ink, plate = np.array([20., 40., 30.]), np.array([250., 220., 20.])
+    assert scene_refine._seg_dist((ink + plate) / 2, ink, plate) < 1
+    assert scene_refine._seg_dist(np.array([240., 240., 240.]), ink, plate) > 100
+    # design words win a tie only on a poster that is about design
+    scene.CONTEXT['words'] = {'letter', 'type', 'design'}
+    assert scene.in_context('FONT') and not scene.in_context('FOND')
+    scene.CONTEXT['words'] = {'summer', 'sale'}
+    assert not scene.in_context('FONT')
+    # stroke cores: the quarter of the lettering farthest from the plate
+    px = np.array([[60., 70., 60.]] * 30 + [[30., 45., 35.]] * 10 + [[240., 215., 20.]] * 10, np.float32)
+    c = scene_refine._stroke_colour(px, plate)
+    assert c[0] < 60

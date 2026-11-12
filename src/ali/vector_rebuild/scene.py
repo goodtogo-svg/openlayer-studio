@@ -671,6 +671,21 @@ def _score(font, text, box, G, V, tracking=0.0):
 
 
 TRACKINGS = (0.0, .03, .06, .1, .15)
+TIE_IOU = .05
+CONTEXT = {'words': set()}
+
+
+def in_context(cand):
+    """A design-domain word on a poster whose other words are design words too."""
+    words = {w.lower() for w in cand.split(' ')}
+    return bool(words & DESIGN_TERMS) and len(CONTEXT['words'] & DESIGN_TERMS) >= 2
+
+
+TRACKING_COST = .1   # IoU per unit of tracking (0.15 tracking needs +0.015 IoU)
+# words of the graphic-design domain this tool serves: preferred when hidden letters leave a tie
+DESIGN_TERMS = set('''font fonts type typeface typography letter letters lettering word words text design designer layout grid poster
+posters print ink paper colour color line lines tape tapes kerning tracking leading serif sans bold italic weight glyph glyphs
+headline title caption logo brand style styles vector pixel image art artwork page cover label sign'''.split())
 
 
 def fit_line(text, G, V, fonts, box):
@@ -697,11 +712,13 @@ def fit_line(text, G, V, fonts, box):
                 if hr:
                     cands.append((x0, y0, x0 + w, y1))
         best = (-1, None, None, 0.0)
+        adj = -1
         for tr in (TRACKINGS if ' ' not in t or len(t) > 1 else (0.0,)):
             for b in cands:
                 s, m = _score(font, t, b, G, V, tr)
-                if s > best[0]:
-                    best = (s, b, m, tr)
+                # letter-spacing must earn its place: designs set most lines at the face's own spacing
+                if s - TRACKING_COST * tr > adj:
+                    adj, best = s - TRACKING_COST * tr, (s, b, m, tr)
         return best
 
     usable = [f for f in fonts if f.covers(text.replace(' ', '') or 'x')]
@@ -716,17 +733,22 @@ def fit_line(text, G, V, fonts, box):
     # dictionary correction, one word at a time
     tokens = t.split(' ')
     for i, tok in enumerate(list(tokens)):
-        best = None
+        scored = []
         for cand in word_candidates(tok):
             trial = ' '.join(tokens[:i] + [cand] + tokens[i + 1:])
             if not font.covers(trial.replace(' ', '')):
                 continue
             r = best_box(font, trial)
-            prior = .01 * sum(vocab().get(w.lower(), 0) for w in cand.split(' ')) / len(cand.split(' '))
-            if r[0] > s + .015 and (best is None or r[0] + prior > best[2]):
-                best = (r, trial, r[0] + prior)
-        if best:
-            (s, b, m, tr), t, _ = best
+            if r[0] > s + .015:
+                prior = .01 * sum(vocab().get(w.lower(), 0) for w in cand.split(' ')) / len(cand.split(' '))
+                scored.append((r, trial, prior, in_context(cand)))
+        if scored:
+            # letters under other objects leave readings the visible ink cannot tell apart (within TIE_IOU):
+            # among those, a word of the poster's own subject wins, then the more common word
+            top = max(x[0][0] for x in scored)
+            tied = [x for x in scored if x[0][0] >= top - TIE_IOU]
+            r, t, _, _ = max(tied, key=lambda x: (x[3], x[0][0] + x[2]))
+            s, b, m, tr = r
             tokens = t.split(' ')
     if t != text:
         for f in usable:
@@ -748,8 +770,9 @@ def page_matrix(m, cx, cy, theta, ulo, vlo):
 
 # ---------------------------------------------------------------- whole scene
 
-def extract(src, records, fonts, ocr=None, log=print, debug_dir=None):
+def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=True):
     H, W = src.shape[:2]
+    CONTEXT['words'] = {re.sub('[^a-z]', '', w.lower()) for r in records for w in r['text'].split()} - {''}
     bg_spec, bg_model = fit_background(src, initial_background_mask(src))
     bg_spec, bg_model = fit_background(src, dist(src, bg_model) < 22)
     lines = [describe_line(src, bg_model, r) for r in records if r['text'].strip() and r.get('confidence', 1) >= .5]
@@ -990,8 +1013,12 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None):
     for k, el in enumerate(out):
         el['id'] = '%02d %s' % (k + 1, el['kind'].upper() + ' ' + (el.get('text') or (el['texts'][0]['text'] if el.get('texts') else
                                                                                           el.get('repeat', {}).get('word', ''))))
-    return {'schema': SCHEMA, 'size': [W, H], 'unit': 'px = pt', 'background': bg_spec, 'elements': out,
+    spec = {'schema': SCHEMA, 'size': [W, H], 'unit': 'px = pt', 'background': bg_spec, 'elements': out,
             'presets': {'shadow': SHADOW_PRESETS, 'material_noise': MATERIAL_NOISE}}
+    if refine:
+        from .scene_refine import refine as _refine
+        spec = _refine(spec, src, fonts, log)
+    return spec
 
 
 def scaled_shadow(kind, h):
