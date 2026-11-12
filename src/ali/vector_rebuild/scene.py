@@ -761,7 +761,8 @@ def fit_line(text, G, V, fonts, box):
             # among those, a word of the poster's own subject wins, then the more common word
             top = max(x[0][0] for x in scored)
             tied = [x for x in scored if x[0][0] >= top - TIE_IOU]
-            r, t, _, _ = max(tied, key=lambda x: (x[3], x[0][0] + x[2]))
+            # ...then the reading that adds the fewest letters to what was seen
+            r, t, _, _ = max(tied, key=lambda x: (x[3], -_lev(tok.lower(), x[1].split(' ')[i].lower(), 3), x[0][0] + x[2]))
             s, b, m, tr = r
             tokens = t.split(' ')
     if t != text:
@@ -826,9 +827,10 @@ def face_table(jobs, fonts):
     """Fit every (text, G, V, box) job with the faces worth trying. Faces come from letter-shape likeness (where the
     visible letters separate) and from a quick whole-line fit. Returns (fits, likeness): postscript -> per-job list."""
     from . import glyph_match
-    glyphs = [glyph_match.source_glyphs(G, V, text) for text, G, V, box in jobs]
+    jobs = [j if len(j) == 5 else tuple(j) + (None,) for j in jobs]
+    glyphs = [glyph_match.source_glyphs(Gs if Gs is not None else G, V, text) for text, G, V, box, Gs in jobs]
     like = {}
-    for k, ((text, G, V, box), sg) in enumerate(zip(jobs, glyphs)):
+    for k, ((text, G, V, box, _), sg) in enumerate(zip(jobs, glyphs)):
         if sg:
             for sim, f in glyph_match.rank(fonts, text, sg, GLYPH_DISTORT_COST):
                 like.setdefault(f.postscript, [None] * len(jobs))[k] = sim
@@ -838,9 +840,9 @@ def face_table(jobs, fonts):
         mean = {ps: sum(v[k] for k in paired) / len(paired) for ps, v in like.items() if all(v[k] is not None for k in paired)}
         by_ps = {f.postscript: f for f in fonts}
         union = [by_ps[ps] for ps in sorted(mean, key=lambda ps: (-mean[ps], ps))[:GLYPH_SHORTLIST]]
-    for text, G, V, box in jobs:
+    for text, G, V, box, _ in jobs:
         union += [f for f in shortlist(text, G, V, fonts, box, k=2 if paired else None) if f not in union]
-    fits = {f.postscript: [fit_line(text, G, V, [f], box) for text, G, V, box in jobs] for f in union}
+    fits = {f.postscript: [fit_line(text, G, V, [f], box) for text, G, V, box, _ in jobs] for f in union}
     return fits, {ps: like.get(ps, [None] * len(jobs)) for ps in fits}
 
 
@@ -1022,11 +1024,24 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
         in_rect = np.zeros(V.shape, bool)
         in_rect[:, int(ext):V.shape[1] - int(ext)] = True
         G = (dist(img, p['glyph']) < 60) & inside if p['glyph'] is not None else np.zeros(V.shape, bool)
+        # for comparing letter shapes the letter edge is where a pixel is nearer the ink than the plate (half-way
+        # through the anti-aliasing); the tight ink radius used for fitting thins letters and favours lighter faces
+        G_shape = None
+        if p['glyph'] is not None:
+            d_ink = dist(img, p['glyph'])
+            plate_px = img[(d_ink > 120) & inside]
+            if len(plate_px) > 50:
+                G_shape = (d_ink < np.minimum(dist(img, np.median(plate_px, 0)), 110)) & inside
         edge = max(3, int(p['h'] * .06))
         G[:edge] = G[-edge:] = False
         G &= in_rect
         G[:, :int(ext) + edge] = G[:, V.shape[1] - int(ext) - edge:] = False
         G = _components_in_band(G, img.shape[0] / 2, p['text_h'] * .45)
+        if G_shape is not None:
+            G_shape[:edge] = G_shape[-edge:] = False
+            G_shape &= in_rect
+            G_shape[:, :int(ext) + edge] = G_shape[:, V.shape[1] - int(ext) - edge:] = False
+            G_shape = _components_in_band(G_shape, img.shape[0] / 2, p['text_h'] * .45)
         el = {'kind': e['kind'], 'center': [round(p['cx'], 2), round(p['cy'], 2)], 'size': [round(p['w'], 2), round(p['h'], 2)],
               'rotation_deg': round(-math.degrees(p['theta']), 2), 'fill': p['fill'], 'fade': p['fade'], 'texts': [],
               'shadow': scaled_shadow(e['kind'], p['h'])}
@@ -1077,11 +1092,14 @@ def extract(src, records, fonts, ocr=None, log=print, debug_dir=None, refine=Tru
                     '%s/plate-%d.png' % (debug_dir, i))
             if box is not None:
                 text = ' '.join(l['text'] for l in sorted(p['lines'], key=lambda l: to_local(*c, l['cx'], l['cy'])[0]))
-                plate_jobs.append((el, text, G & V, V, box, ulo, vlo, glyph_hex))
+                Gs = (G_shape & V & span) if G_shape is not None else None
+                if Gs is not None and _ink_box(Gs) is not None:   # lettering on tapes: fit the half-way edge too
+                    G, box = Gs, _ink_box(Gs)
+                plate_jobs.append((el, text, G & V, V, box, ulo, vlo, glyph_hex, Gs))
         results[i] = el
     # one typeface for the lettering on all plates (a poster's tapes repeat the same face): the closest face overall
-    per_job = agree_font([(text, G, V, box) for _, text, G, V, box, _, _, _ in plate_jobs], fonts, log, 'plate lettering')
-    for (el, text, G, V, box, ulo, vlo, glyph_hex), f in zip(plate_jobs, per_job):
+    per_job = agree_font([(text, G, V, box, Gs) for _, text, G, V, box, _, _, _, Gs in plate_jobs], fonts, log, 'plate lettering')
+    for (el, text, G, V, box, ulo, vlo, glyph_hex, _), f in zip(plate_jobs, per_job):
         if f:
             bx = f['box']
             el['texts'].append({'text': f['text'], 'ocr_text': text, 'font': f['font'].postscript, 'color': glyph_hex,
