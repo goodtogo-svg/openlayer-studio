@@ -290,10 +290,10 @@ def _fit(text, glyph, fonts, line_h, skews, trackings, ignore=None):
     H, W = glyph.shape
     if ignore is None:
         ignore = np.zeros((H, W), bool)
-    best = None
+    best, overall = None, None
     for _ in range(3):
         if glyph.sum() < 50:
-            return None, glyph
+            break
         bx0, by0, bx1, by1 = _ink_box(glyph)
         box = (float(bx0), float(by0), float(bx1 - bx0), float(by1 - by0))
         pad = int(line_h * 0.3)
@@ -313,22 +313,22 @@ def _fit(text, glyph, fonts, line_h, skews, trackings, ignore=None):
                     iou = (rendered & observed).sum() / max(1, (rendered | observed).sum())
                     coarse.append({'iou': float(iou), 'font': font, 'skew': float(skew), 'm': m, 'box': box, 'tracking': float(track)})
         if not coarse:
-            return None, glyph
+            break
         # Refine the box for the strongest few candidates; upright text wins unless a slant clearly fits better.
         coarse.sort(key=lambda c: -c['iou'])
         shortlist, seen = [], set()
         for c in coarse:
-            key = (c['font'].postscript, round(c['skew'], 2))
-            if key not in seen:
-                seen.add(key)
+            per_font = sum(1 for x in shortlist if x['font'] is c['font'])
+            if per_font < 3:
                 shortlist.append(c)
-            if len(shortlist) == 4:
-                break
         upright = [c for c in coarse if c['skew'] == min(skews)]
         if upright and upright[0] not in shortlist:
             shortlist.append(upright[0])
         best = max((_refine(c, text, observed, keep_px, (ox, oy), occluded) for c in shortlist),
                    key=lambda c: c['iou'] - 0.1 * c['skew'])
+        # pruning can also cut real letters when the fit is off; keep the best round, not the last
+        if overall is None or best['iou'] > overall[0]['iou']:
+            overall = (best, glyph)
         full = np.zeros((H, W), bool)
         full[oy:ey, ox:ex] = rasterise(best['font'], text, NOMINAL, best['m'], observed.shape, (ox, oy), best['tracking'])
         near = cv2.dilate(full.astype(np.uint8), np.ones((int(line_h * 0.06) | 1,) * 2, np.uint8)) > 0
@@ -338,10 +338,11 @@ def _fit(text, glyph, fonts, line_h, skews, trackings, ignore=None):
         keep = inside >= 0.6 * areas
         keep[0] = False
         pruned = keep[labels]
-        if pruned.sum() == glyph.sum() or pruned.sum() < 50:
+        # only a fit that already explains most of the ink may decide what is not lettering
+        if best['iou'] < 0.45 or pruned.sum() == glyph.sum() or pruned.sum() < 50:
             break
         glyph = pruned
-    return best, glyph
+    return overall if overall else (None, glyph)
 
 
 def _runs(text, colours):
@@ -366,7 +367,9 @@ def _entry(name, text, best, fill, runs, ocr):
 def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None, trackings=None, debug_dir=None):
     """Returns (specs, glyph_mask_union, report). Coordinates are source pixels."""
     H, W = src.shape[:2]
-    trackings = trackings if trackings is not None else [round(t, 2) for t in np.arange(-0.1, 0.31, 0.05)]
+    # Negative tracking makes glyphs overlap, and Illustrator then breaks the line into fragments on PDF import;
+    # tight setting is matched by the horizontal scale instead.
+    trackings = trackings if trackings is not None else [-0.06, -0.03, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
     skews = skews if skews is not None else [round(s, 2) for s in np.arange(0, 0.36, 0.02)]
     specs, report = [], []
     union = np.zeros((H, W), bool)

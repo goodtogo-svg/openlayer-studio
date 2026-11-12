@@ -172,7 +172,17 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
     label = label.copy()
     # Regions that are mostly lettering (the segmenter often cuts out single glyphs) join the region around them,
     # otherwise they leave glyph-shaped holes and ghosts once the text is live.
-    textish = [k for k in np.unique(label) if k >= 0 and (tmask[label == k] > 0).mean() > 0.5]
+    boxes = [(s['x'], s['y'], s['x'] + s['w'], s['y'] + s['h']) for s in specs if 'frame' not in s]
+
+    def inside_text_box(m):
+        ys, xs = np.nonzero(m)
+        for x0, y0, x1, y1 in boxes:
+            pad = 0.1 * (y1 - y0)
+            inside = ((xs >= x0 - pad) & (xs <= x1 + pad) & (ys >= y0 - pad) & (ys <= y1 + pad)).mean()
+            if inside > 0.85 and len(xs) < 0.5 * (x1 - x0) * (y1 - y0):
+                return True
+        return False
+    textish = [k for k in np.unique(label) if k >= 0 and ((tmask[label == k] > 0).mean() > 0.5 or inside_text_box(label == k))]
     for k in sorted(textish, key=lambda k: (label == k).sum()):
         reg = label == k
         ring = cv2.dilate(reg.astype(np.uint8), np.ones((7, 7), np.uint8)).astype(bool) & ~reg
