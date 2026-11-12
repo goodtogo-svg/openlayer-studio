@@ -11,6 +11,10 @@ import sys
 import time
 from pathlib import Path
 
+# Scene rebuild is kept when its render is this close to the source (mean abs error, 0-255); otherwise the image
+# has artwork the scene model does not describe (icons, badges, photos) and the region rebuild is used.
+SCENE_MAX_MAE = 25.0
+
 DEFAULT_FONTS = [
     {'variable': 'models/fonts/NotoSansTC.ttf'},
     {'file': '/usr/share/fonts/opentype/inter/Inter-Bold.otf'},
@@ -44,7 +48,7 @@ def parse_font_args(values, root):
     return out
 
 
-def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600):
+def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600, method='auto'):
     from ..runtime import ROOT, digest
     source = Path(source).expanduser().resolve()
     out = Path(out).resolve()
@@ -62,7 +66,7 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
     out.mkdir(parents=True, exist_ok=True)
     request = {'schema': 'ali-vector-rebuild/1', 'source': str(source), 'source_sha256': digest(source), 'out': str(out),
                'locale': locale, 'fonts': parse_font_args(fonts, ROOT), 'pt_per_px': pt_per_px,
-               'ocr_python': str(ocr_python)}
+               'ocr_python': str(ocr_python), 'method': method}
     (out / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2))
     env = os.environ.copy()
     env.update(PYTHONPATH=str(ROOT / 'src'), PYTHONDONTWRITEBYTECODE='1', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK='True',
@@ -78,8 +82,8 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
     report = json.loads((out / 'rebuild-report.json').read_text())
     artifacts = {p.name: digest(p) for p in sorted(out.iterdir()) if p.suffix in ('.svg', '.pdf', '.ai')}
     return {'status': 'complete', 'source_sha256': request['source_sha256'], 'out': str(out), 'artifacts': artifacts,
-            'elapsed_seconds': round(time.time() - started, 1), 'text_frames': report['text_frames'],
-            'layers': report['layers'], 'region_stats': report['region_stats'], 'score': report['score'],
+            'elapsed_seconds': round(time.time() - started, 1), 'method': report.get('method', 'regions'),
+            **{k: report[k] for k in ('text_frames', 'layers', 'region_stats', 'score', 'elements', 'scene_mae') if k in report},
             'note': 'Not user-approved. A native .ai counts only after it is opened and saved in Illustrator.'}
 
 
@@ -109,6 +113,28 @@ def worker(request_path):
     (out / 'ocr.json').write_text(json.dumps(records, ensure_ascii=False))
     locale = req['locale'] if req['locale'] != 'auto' else guess_locale(records)
     print('ocr: %d lines, locale %s' % (len(records), locale), flush=True)
+    method = req.get('method', 'auto')
+    if method in ('auto', 'scene'):
+        from . import scene, scene_build
+        from .fonts import load_candidates
+        fonts = load_candidates(req['fonts'], out / 'work' / 'fonts')
+        spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
+        pdf = scene_build.build(spec, fonts, out, log=lambda s: print(s, flush=True))
+        mae, _ = scene_build.score(pdf, src)
+        print('scene: mean abs error %.2f' % mae, flush=True)
+        if method == 'scene' or mae <= SCENE_MAX_MAE:
+            report = {'method': 'scene', 'scene_mae': round(mae, 2), 'score': {'mae': round(mae, 2)},
+                      'elements': [{'id': e['id'], 'kind': e['kind'], 'inferred': e.get('inferred', False) or any(t.get('inferred') for t in e.get('texts', []))}
+                                   for e in spec['elements']],
+                      'text_frames': sum(len(scene_build.text_frames(e, fonts)) for e in spec['elements'])}
+            (out / 'rebuild-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        print('scene: error above %.0f, the image is not a type-and-plates layout; using region rebuild' % SCENE_MAX_MAE, flush=True)
+        attempt = out / 'work' / 'scene-attempt'
+        attempt.mkdir(parents=True, exist_ok=True)
+        for name in ('scene.svg', 'scene.pdf', 'scene.ai', 'scene.json', 'native'):
+            if (out / name).exists():
+                (out / name).rename(attempt / name)
     masks = segment.tiled_masks(src, log=lambda s: print(s, flush=True))
     label = segment.partition(segment.merge_masks(masks, H, W), H, W)
     np.save(out / 'work' / 'label.npy', label)

@@ -87,7 +87,8 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
                 page.insert_text(origin, fr['text'][i:j], fontname=used[fr['font']], fontsize=NOMINAL, color=rgb(colours[i]),
                                  morph=(origin, pymupdf.Matrix(a, -b, -c, d, 0, 0)),
                                  render_mode=2 if strokes[i] else 0, border_width=(.65 / NOMINAL) if strokes[i] else 0.05,
-                                 fill=rgb(colours[i]) if strokes[i] else None)
+                                 fill=rgb(colours[i]) if strokes[i] else None, fill_opacity=fr.get('opacity', 1),
+                                 stroke_opacity=fr.get('opacity', 1))
                 xref = page.get_contents()[-1]
                 if track:
                     st = doc.xref_stream(xref).decode('latin-1')

@@ -20,6 +20,7 @@ OpenLayer Studio 與 Adobe Inc. 無關聯，也未經其認可或贊助。Adobe�
 | psd-tools | MIT | |
 | vtracer | MIT | |
 | fontTools（選配） | MIT | |
+| wordfreq（選配，補字字典） | Apache-2.0 | 詞頻資料含 CC BY-SA 4.0 來源 |
 | pikepdf（選配） | MPL-2.0 | |
 | pytest（測試） | MIT | |
 

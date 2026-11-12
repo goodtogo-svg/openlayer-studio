@@ -24,7 +24,7 @@ def main(argv=None):
     ts=sub.add_parser('text-styles');ts.add_argument('input');ts.add_argument('--regions',required=True);ts.add_argument('--out',required=True)
     cm=sub.add_parser("component-master");cm.add_argument("plan");cm.add_argument("--out",required=True)
     se=sub.add_parser("scene-effects");se.add_argument("plan");se.add_argument("--out",required=True)
-    vr=sub.add_parser('vector-rebuild',help='Image -> OCR + tiled segmentation -> vector SVG/PDF/.ai with live text');vr.add_argument('input');vr.add_argument('--out',required=True);vr.add_argument('--locale',default='auto');vr.add_argument('--font',action='append',default=[],help='PATH[=PostScriptName] or variable:PATH; repeatable');vr.add_argument('--pt-per-px',type=float);vr.add_argument('--timeout',type=int,default=3600)
+    vr=sub.add_parser('vector-rebuild',help='Image -> OCR + tiled segmentation -> vector SVG/PDF/.ai with live text');vr.add_argument('input');vr.add_argument('--out',required=True);vr.add_argument('--locale',default='auto');vr.add_argument('--font',action='append',default=[],help='PATH[=PostScriptName] or variable:PATH; repeatable');vr.add_argument('--pt-per-px',type=float);vr.add_argument('--timeout',type=int,default=3600);vr.add_argument('--method',choices=['auto','scene','regions'],default='auto',help='scene: titles, tapes, ribbons as designed objects (accepted 11/08 method); regions: segmentation; auto: scene when it reproduces the image')
     args=p.parse_args(argv)
     try:
         if args.cmd in ('engine','reconstruct'):
@@ -41,7 +41,7 @@ def main(argv=None):
             return 0 if result.get('status')=='complete' else 2
         elif args.cmd=='vector-rebuild':
             from .vector_rebuild.job import run_job
-            print(json.dumps(run_job(args.input,args.out,args.locale,args.font,args.pt_per_px,args.timeout),ensure_ascii=False,indent=2))
+            print(json.dumps(run_job(args.input,args.out,args.locale,args.font,args.pt_per_px,args.timeout,args.method),ensure_ascii=False,indent=2))
         elif args.cmd=='scene-effects':
             from .scene_effects import compile_effects
             print(json.dumps(compile_effects(args.plan,args.out),ensure_ascii=False,indent=2))

@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 import pytest
@@ -87,3 +88,71 @@ def test_tiled_masks_join_across_tile_seam_and_partition_is_exclusive():
     big = label[60, 100]
     assert big >= 0 and (label[whole] == big).all()
     assert label[60, 20] >= 0 and label[60, 20] != big
+
+
+LIB = Path('/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf')
+
+
+def _poster():
+    """Dark radial background, a white title and a rotated yellow tape with dark lettering over it."""
+    from PIL import Image, ImageDraw, ImageFont
+    W, H = 900, 600
+    yy, xx = np.mgrid[0:H, 0:W]
+    t = np.clip(np.hypot(xx - 450, yy - 300) / 520, 0, 1)[..., None]
+    img = Image.fromarray(((1 - t) * 52 + t * 8).repeat(3, 2).astype(np.uint8))
+    d = ImageDraw.Draw(img)
+    d.text((150, 190), 'HELLO', font=ImageFont.truetype(str(LIB), 190), fill=(240, 240, 238))
+    tape = Image.new('RGBA', (340, 64), (250, 218, 18, 255))
+    ImageDraw.Draw(tape).text((40, 10), 'TAPE TEXT', font=ImageFont.truetype(str(LIB), 40), fill=(21, 40, 32))
+    tape = tape.rotate(8, expand=True, resample=Image.BICUBIC)
+    img.paste(tape, (380 - tape.width // 2, 330 - tape.height // 2), tape)
+    src = np.array(img)
+    c, s = math.cos(math.radians(-8)), math.sin(math.radians(-8))
+
+    def rot(u, v):
+        return [380 + u * c - v * s, 330 + u * s + v * c]
+    records = [{'text': 'HELLO', 'confidence': .99, 'polygon': [[140, 205], [760, 205], [760, 370], [140, 370]]},
+               {'text': 'TAPE TEXT', 'confidence': .99, 'polygon': [rot(-135, -20), rot(135, -20), rot(135, 22), rot(-135, 22)]}]
+    return src, records
+
+
+@pytest.mark.skipif(not LIB.is_file(), reason='Liberation Sans Bold not installed')
+def test_scene_finds_tape_title_order_and_builds(tmp_path):
+    from ali.vector_rebuild import scene, scene_build
+    from ali.vector_rebuild.fonts import Font
+    src, records = _poster()
+    fonts = [Font(LIB, 'Arial-BoldMT')]
+    spec = scene.extract(src, records, fonts, log=lambda s: None)
+    kinds = [e['kind'] for e in spec['elements']]
+    assert kinds == ['title', 'tape']                       # tape stacked above the title
+    tape = spec['elements'][1]
+    assert abs(tape['rotation_deg'] - 8) < 1.5
+    assert abs(tape['center'][0] - 380) < 8 and abs(tape['center'][1] - 330) < 8
+    assert abs(tape['size'][0] - 340) < 14 and abs(tape['size'][1] - 64) < 6
+    assert tape['fill']['type'] == 'flat' and np.abs(np.array(tape['fill']['color']) - [250, 218, 18]).max() < 12
+    assert tape['texts'][0]['text'] == 'TAPE TEXT'
+    title = spec['elements'][0]
+    assert title['text'] == 'HELLO' and title['iou'] > .6
+    assert spec['background']['type'] == 'radial'
+    pdf = scene_build.build(spec, fonts, tmp_path / 'out', log=lambda s: None)
+    mae, _ = scene_build.score(pdf, src)
+    assert mae < 12
+    jsx = (tmp_path / 'out' / 'native' / 'build-illustrator.jsx').read_text()
+    assert 'GradientType.RADIAL' in jsx and 'TAPE TEXT' in jsx and 'PLACEHOLDER' not in jsx
+
+
+def test_shadow_presets_scale_with_height():
+    from ali.vector_rebuild.scene import scaled_shadow
+    tape = scaled_shadow('tape', 83)        # accepted yellow tapes: (3,8,4,.30) (3,23,14,.40) (3,42,26,.18)
+    assert [round(v) for v in tape[1][:3]] == [3, 23, 14] and tape[2][3] == .18
+    ribbon = scaled_shadow('ribbon', 78)    # accepted blue ribbons: (1,4,2,.42) (2,13,7,.48) (3,25,16,.23)
+    assert [round(v) for v in ribbon[2][:3]] == [3, 25, 16]
+
+
+def test_word_candidates_cover_hidden_letters():
+    pytest.importorskip('wordfreq')
+    from ali.vector_rebuild.scene import word_candidates
+    assert 'CROSS' in word_candidates('CRYOSS')
+    assert 'LEVELS' in word_candidates('LLS')
+    assert 'EVERY DETAIL' in word_candidates('EVERYDETAIL')
+    assert word_candidates('TAPES') == []

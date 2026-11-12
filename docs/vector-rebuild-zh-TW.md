@@ -10,7 +10,15 @@ ali vector-rebuild banner.png --out jobs/banner-vector \
   --font /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf=Arial-BoldMT
 ```
 
-需要 `segmentation` 與 `ocr` 兩個隔離環境（`scripts/setup-v04.py`）以及 `sam2-small` 權重。
+需要 `segmentation` 與 `ocr` 兩個隔離環境（`scripts/setup-v04.py`）以及 `sam2-small` 權重。補字字典需要在 `segmentation` 環境另裝 `wordfreq`（選配）。
+
+## 兩種方法（`--method`）
+
+- `scene`：把海報當成設計物件重建（背景漸層、主標、膠帶、緞帶、層序、陰影、材質），也就是 11/08 兩張膠帶海報驗收通過的做法，改成自動量測。紀錄與參數見 [場景重建](scene-rebuild-zh-TW.md)。
+- `regions`：分塊分割 + 形狀辨識（下方流程），適合有圖示、徽章、照片的版面。
+- `auto`（預設）：先跑 `scene`，成品與原圖平均誤差 ≤ 25 就採用，否則改用 `regions`。
+
+以下「流程」說明 `regions` 方法。
 
 ## 流程
 

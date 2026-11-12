@@ -129,7 +129,7 @@ Codex 專案 Skill 位於 `.agents/skills/openlayer-studio/SKILL.md`。Scene Gra
 
 ## 圖片轉向量（形狀辨識＋即時文字）
 
-`ali vector-rebuild image.png --out jobs/name` 自動分析圖片並重建成向量 SVG／PDF／PDF 相容 .ai：形狀與漸層取代點陣圖，文字是可編輯文字。說明見 [圖片 → 向量重建](docs/vector-rebuild-zh-TW.md)。
+`ali vector-rebuild image.png --out jobs/name` 自動分析圖片並重建成向量 SVG／PDF／PDF 相容 .ai：形狀與漸層取代點陣圖，文字是可編輯文字。說明見 [圖片 → 向量重建](docs/vector-rebuild-zh-TW.md)；以標題、膠帶、緞帶為主的海報走 [場景重建](docs/scene-rebuild-zh-TW.md)（`--method scene`，預設 `auto` 自動選）。
 
 ## 文章編輯稿：使用 story 與欄位串接
 
