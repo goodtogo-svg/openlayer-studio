@@ -504,20 +504,28 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
                 pglyph = cv2.warpAffine(pglyph.astype(np.uint8), R_inv, (W, H), flags=cv2.INTER_NEAREST) > 0
             if R_inv is None and CJK.search(part):
                 if pbest['iou'] < 0.33:
-                    weak.append((len(specs), len(report), part, pglyph, occ, line_h, pbest, fill, pruns, line['text']))
+                    weak.append((len(specs), len(report), part, pglyph, occ, line_h, pbest, fill, pruns, line['text'], line['box']))
                 else:
-                    solid_refs.append((line_h, pbest))
+                    solid_refs.append((line_h, pbest, part))
             specs.append(entry)
             report.append(dict(entry, decision='live_text'))
             union |= pglyph
     # A weak fit picks its face almost at random; body lines of one block share a face, so a weak line takes the
     # face and slant of the best-fitting line of similar height and is refitted with that face only.
-    for si, ri, part, pglyph, occ, line_h, pbest, fill, pruns, ocr_text in weak:
-        near = [b for h, b in solid_refs if abs(h - line_h) <= 0.2 * line_h]
+    for si, ri, part, pglyph, occ, line_h, pbest, fill, pruns, ocr_text, lbox in weak:
+        near = [(b, t) for h, b, t in solid_refs if abs(h - line_h) <= 0.2 * line_h]
         if not near:
             continue
-        ref = max(near, key=lambda b: b['iou'])
-        nb, ng = _fit(part, pglyph, [ref['font']], line_h, [ref['skew']], [ref['tracking']], occ)
+        # the same word set elsewhere on the page (a repeated label) is the best reference
+        same = [b for b, t in near if t == part]
+        ref = max(same or [b for b, _ in near], key=lambda b: b['iou'])
+        if same:
+            # a repeated label is set at the size of its best instance, centred where the OCR found it
+            x, y, w, h = ref['box']
+            cx, cy = (lbox[0] + lbox[2]) / 2, (lbox[1] + lbox[3]) / 2
+            nb, ng = dict(ref, box=(cx - w / 2, cy - h / 2, w, h)), pglyph
+        else:
+            nb, ng = _fit(part, pglyph, [ref['font']], line_h, [ref['skew']], [ref['tracking']], occ)
         if nb is None:
             continue
         entry = dict(_entry(specs[si]['name'], part, nb, fill, pruns, ocr_text), consensus_with=ref['font'].postscript)

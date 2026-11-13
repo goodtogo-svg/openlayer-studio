@@ -184,3 +184,41 @@ def trace_region(src, mask, eid, scale=2):
     paths = re.findall(r'<path[^>]*/>', svg)
     body = ''.join(paths)
     return '<g id="%s" transform="translate(%d %d) scale(%s)">%s</g>' % (eid, x0, y0, 1 / scale, body), len(paths)
+
+
+def residual_detail(src, rendered, keep_out, threshold=24, tile=384, scale=2):
+    """Vector paths for what a rebuild still misses: pixels where the render is more than threshold off the
+    source (per channel), outside keep_out (live text), traced tile by tile in the source colours.
+    Returns ([svg elements], path count, covered fraction)."""
+    import re
+    import vtracer
+    from PIL import Image
+    H, W = src.shape[:2]
+    res = np.abs(src.astype(np.int16) - rendered.astype(np.int16)).max(2) > threshold
+    res &= ~keep_out
+    res = cv2.morphologyEx(res.astype(np.uint8), cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+    res = cv2.dilate(res, np.ones((3, 3), np.uint8))
+    # close small gaps so shading comes out as whole patches, not a speckle of single pixels
+    res = cv2.morphologyEx(res, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)) > 0
+    res &= ~keep_out
+    els, count = [], 0
+    for ty in range(0, H, tile):
+        for tx in range(0, W, tile):
+            y1, x1 = min(H, ty + tile), min(W, tx + tile)
+            m = res[ty:y1, tx:x1]
+            if m.sum() < 20:
+                continue
+            rgba = np.dstack([src[ty:y1, tx:x1], (m * 255).astype(np.uint8)])
+            im = Image.fromarray(rgba).resize(((x1 - tx) * scale, (y1 - ty) * scale), Image.NEAREST)
+            buf = io.BytesIO()
+            im.save(buf, 'PNG')
+            svg = vtracer.convert_raw_image_to_svg(buf.getvalue(), img_format='png', colormode='color', hierarchical='cutout',
+                                                   mode='spline', filter_speckle=2 * scale, color_precision=7, layer_difference=8,
+                                                   corner_threshold=60, length_threshold=4.0, max_iterations=10,
+                                                   splice_threshold=45, path_precision=1)
+            paths = re.findall(r'<path[^>]*/>', svg)
+            if paths:
+                count += len(paths)
+                els.append('<g id="DETAIL_%d_%d" transform="translate(%d %d) scale(%s)">%s</g>'
+                           % (ty // tile, tx // tile, tx, ty, 1 / scale, ''.join(paths)))
+    return els, count, float(res.mean())

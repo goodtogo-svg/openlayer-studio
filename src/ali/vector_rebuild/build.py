@@ -117,7 +117,7 @@ def _clusters(masks, gap=6):
     return list(groups.values())
 
 
-def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, locale='zh-TW', ocr=None, log=print):
+def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, locale='zh-TW', ocr=None, log=print, detail=True):
     """src: HxWx3 uint8; label: HxW int partition (-1 = unassigned). Returns report dict."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -287,19 +287,49 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
 
     # 6. assemble (page units = source px scaled by pt_per_px)
     k = pt_per_px or 1.0
-    body = ''.join('<g id="%s">%s</g>' % (name, ''.join(els)) for name, els in layers.items() if els)
-    svg = ('<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" viewBox="0 0 %d %d">'
-           '<defs>%s</defs>%s</svg>' % (W * k, H * k, W, H, ''.join(defs), body))
-    (out_dir / 'rebuild.svg').write_text(svg)
-    def doc(names):
-        part = ''.join('<g id="%s">%s</g>' % (n, ''.join(e)) for n, e in layers.items() if e and n in names)
-        return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" viewBox="0 0 %d %d"><defs>%s</defs>%s</svg>'
-                % (W * k, H * k, W, H, ''.join(defs), part))
-    lower = [n for n in layers if n.startswith('01')]
-    stages = [(doc(lower), [f for f in frames if f.get('behind')]),
-              (doc([n for n in layers if n not in lower]), [f for f in frames if not f.get('behind')])]
-    write_pdf([(art, [dict(f, m=tuple(v * k for v in f['m'])) for f in fr]) for art, fr in stages], fonts,
-              (W * k, H * k), out_dir / 'rebuild.pdf', out_dir)
+
+    def assemble():
+        body = ''.join('<g id="%s">%s</g>' % (name, ''.join(els)) for name, els in layers.items() if els)
+        svg = ('<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" viewBox="0 0 %d %d">'
+               '<defs>%s</defs>%s</svg>' % (W * k, H * k, W, H, ''.join(defs), body))
+        (out_dir / 'rebuild.svg').write_text(svg)
+
+        def doc(names):
+            part = ''.join('<g id="%s">%s</g>' % (n, ''.join(e)) for n, e in layers.items() if e and n in names)
+            return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" viewBox="0 0 %d %d"><defs>%s</defs>%s</svg>'
+                    % (W * k, H * k, W, H, ''.join(defs), part))
+        lower = [n for n in layers if n.startswith('01')]
+        stages = [(doc(lower), [f for f in frames if f.get('behind')]),
+                  (doc([n for n in layers if n not in lower]), [f for f in frames if not f.get('behind')])]
+        write_pdf([(art, [dict(f, m=tuple(v * k for v in f['m'])) for f in fr]) for art, fr in stages], fonts,
+                  (W * k, H * k), out_dir / 'rebuild.pdf', out_dir)
+    assemble()
+    # 7. detail pass: where the rebuild still differs from the source (thin outlines and rules the segmenter
+    # merged away, shading inside illustrations), trace the source colours as vector paths on their own layer.
+    if detail:
+        from .shapes import residual_detail
+        # keep off the lettering only (source glyphs and the live text drawn for them), not the boxes around it:
+        # outlines, plates and shadows next to the text still get their detail
+        ink = glyph_union.copy()
+        for f in frames:
+            ink |= rasterise(by_ps[f['font']], f['text'], NOMINAL, f['m'], (H, W), (0, 0), f.get('tracking', 0)).astype(bool)
+        keep_out = cv2.dilate(ink.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+        # small body text: any source glyph pixel the live text misses would come back as a speck, so keep off
+        # the whole line box there
+        for f in frames:
+            if 'frame' in f or f['h'] > 40:
+                continue
+            p = f['h'] * 0.25
+            keep_out[max(0, int(f['y'] - p)):int(f['y'] + f['h'] + p), max(0, int(f['x'] - p)):int(f['x'] + f['w'] + p)] = True
+        els, npaths, cover = residual_detail(src, render(out_dir / 'rebuild.pdf', src.shape), keep_out)
+        if els:
+            items = list(layers.items())
+            at = next(i for i, (n, _) in enumerate(items) if n == '04_Text_decorations')
+            layers.clear()
+            layers.update(items[:at] + [('03b_Detail', els)] + items[at:])
+            assemble()
+        report['detail'] = {'paths': npaths, 'area': round(float(cover), 4)}
+        log('detail: %d paths over %.1f%% of the page' % (npaths, cover * 100))
     (out_dir / 'rebuild.ai').write_bytes((out_dir / 'rebuild.pdf').read_bytes())
     report['regions'] = region_meta
     report['region_stats'] = stats
@@ -310,6 +340,15 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
     report['score'] = score(out_dir / 'rebuild.pdf', src)
     (out_dir / 'rebuild-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2, default=float))
     return report
+
+
+def render(pdf, shape):
+    import pymupdf
+    H, W = shape[:2]
+    with pymupdf.open(pdf) as d:
+        page = d[0]
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(W / page.rect.width, H / page.rect.height), alpha=False)
+        return np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)[:H, :W].copy()
 
 
 def score(pdf, src):
