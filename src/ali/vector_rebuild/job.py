@@ -15,6 +15,13 @@ from pathlib import Path
 # has artwork the scene model does not describe (icons, badges, photos) and the region rebuild is used.
 SCENE_MAX_MAE = 25.0
 
+# General scene parameters accepted on 2026-11-13 (yellow tape poster v9c): the bundled free faces (Anton, Bebas Neue,
+# Saira Condensed ExtraBold as layout stand-in) plus Eurostile Cond Heavy from Adobe Fonts with metrics measured in
+# Illustrator. Used when neither --font nor --font-pool is given; CJK lines keep the default Noto face.
+PRESET_DIR = Path(__file__).parent / 'data'
+PRESET_POOL = PRESET_DIR / 'fonts'
+PRESET_ADOBE_FONTS = PRESET_DIR / 'adobe-fonts.json'
+
 DEFAULT_FONTS = [
     {'variable': 'models/fonts/NotoSansTC.ttf'},
     {'file': '/usr/share/fonts/opentype/inter/Inter-Bold.otf'},
@@ -70,7 +77,11 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
                'ocr_python': str(ocr_python), 'method': method,
                'font_pool': [str(Path(d).expanduser().resolve()) for d in (font_pool or [])],
                'font_names': str(Path(font_names).expanduser().resolve()) if font_names else None,
-               'adobe_fonts': str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts else None}
+               'adobe_fonts': str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts and adobe_fonts != 'none' else None,
+               'font_preset': None}
+    if not fonts and not font_pool:
+        request.update(font_preset='2026-11-13', font_pool=[str(PRESET_POOL)],
+                       adobe_fonts=None if adobe_fonts == 'none' else str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts else str(PRESET_ADOBE_FONTS))
     (out / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2))
     env = os.environ.copy()
     env.update(PYTHONPATH=str(ROOT / 'src'), PYTHONDONTWRITEBYTECODE='1', PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK='True',
@@ -122,6 +133,8 @@ def worker(request_path):
         from . import scene, scene_build
         from .fonts import load_candidates, pool_candidates
         fonts = load_candidates(req['fonts'], out / 'work' / 'fonts')
+        if req.get('font_preset'):
+            fonts = [f for f in fonts if f.is_cjk]   # the preset's Latin faces replace the generic defaults
         if req.get('font_pool'):
             fonts += pool_candidates(req['font_pool'], req.get('font_names'), exclude={f.postscript for f in fonts})
             print('fonts: %d candidate faces (closest face per line group)' % len(fonts), flush=True)

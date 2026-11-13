@@ -78,6 +78,27 @@
 - 雲端預覽與評分改用 `work/layout-proxy.pdf`（代用字型版）。`fonts/fonts.json` 的 `adobe_fonts` 列出要啟用的字型與網址。
 - 代用字型與 Adobe 字型的字寬不同，必須在 Illustrator 開檔確認；`native/build-illustrator.jsx` 可用真正的字型重新貼合。
 
+## 4.1 通用參數（2026-11-13 驗收：黃色膠帶海報 v9c）
+
+使用者 2026-11-13 驗收黃色版 v9c（「這版可以了～」），並指定它的設定為通用參數。沒有給 `--font` 與 `--font-pool` 時，`--method scene` 就用這組預設：
+
+| 項目 | 設定 |
+|---|---|
+| 免費字型（隨檔附上，含授權） | `src/ali/vector_rebuild/data/fonts/`：Anton、Bebas Neue、Saira Condensed ExtraBold（OFL） |
+| Adobe Fonts 字型 | `data/adobe-fonts.json`：Eurostile Cond Heavy（EurostileCon-Hea），取代 Saira Condensed 字族 |
+| Adobe 字型的排版 | `data/EurostileCon-Hea.metrics.json`：在 Illustrator 2027 量的字寬與字墨框（只有數字，沒有字形）；Saira Condensed ExtraBold 的字形移進這些框做替身 |
+| .ai 裡的 Adobe 字型 | 不嵌入，只寫名稱，WinAnsi 字碼；用戶端 Illustrator 開檔自動啟用 |
+| 膠帶尾端漸暗 | 平塗膠帶的黑色漸層透明度烘進不透明漸層（Illustrator 會把透明停點畫得太暗） |
+| 大標題陰影 | 每個大標題的陰影圖都輸出到 PDF/.ai（舊版漏掉） |
+| 中日韓文字 | 仍用預設 Noto Sans TC |
+| 比對常數 | GLYPH_WEIGHT 4、GLYPH_DISTORT_COST .5、DISTORT_COST .15、TRACKING_COST .1、TIE_IOU .08、FREE_FACE_MIN .75 |
+
+驗收數字（Illustrator 2027 開檔、存檔再重開後輸出的 PNG，對原圖，每色差 ≤24）：全圖 91.40%（1px 容差 92.78%），膠帶 61.6%（68.8%）；10 個文字框、0 字型替換。
+
+**品質以用戶端為準。** 雲端產出的好壞要以「客戶下載後在自己電腦用 Illustrator 開啟」的結果判斷，不能只看雲端預覽（`work/layout-proxy.pdf`）。每一版都要在 Illustrator 開檔、存檔再重開，用重開後的輸出圖比對原圖。
+
+`--adobe-fonts none` 可關掉 Adobe Fonts；給了 `--font` 或 `--font-pool` 就不套用這組預設。
+
 ## 5. 已知限制
 
 - 完全被遮住的字母只能靠字典與詞頻推測（例如 FON? POWER 可能推成 FOND 而非 FONT），一律標記 `inferred`，需人工確認。

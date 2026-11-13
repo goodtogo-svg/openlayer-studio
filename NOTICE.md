@@ -41,3 +41,9 @@ OpenLayer Studio 與 Adobe Inc. 無關聯，也未經其認可或贊助。Adobe�
 Inter、Noto Sans TC／SC／KR：SIL Open Font License 1.1。可隨軟體使用，但不得單獨販售字型本身；使用時須保留各字型的 OFL.txt。
 
 字型比對只輸出候選名稱，不判定授權。使用者交付作品時須自行確認所用字型的授權。
+
+### 隨專案散布的字型（`src/ali/vector_rebuild/data/fonts/`）
+
+Anton、Bebas Neue、Saira Condensed ExtraBold：SIL Open Font License 1.1，授權條款與字型檔放在一起。Saira 的保留字型名稱為「Saira」，所以雲端排版用的改寫版替身字型改名為「ALI Metric Stand-in」，且不嵌入輸出檔。
+
+`data/EurostileCon-Hea.metrics.json` 只有在 Illustrator 量到的字寬與字墨框數字，不含 Eurostile 字形；Eurostile Cond Heavy 由用戶端透過 Adobe Fonts 取得。

@@ -304,6 +304,15 @@ def metric_proxy(proxy_path, metrics, out_path):
             hmtx[name] = (round(adv), g.xMin)
         else:
             hmtx[name] = (round(adv), hmtx[name][1])
+    # a modified font must not carry the original's (reserved) names
+    name = tt['name']
+    for rec in list(name.names):
+        if rec.nameID in (1, 3, 4, 6, 16, 17, 21, 22):
+            name.removeNames(nameID=rec.nameID)
+    for nid, val in ((1, 'ALI Metric Stand-in'), (2, 'Regular'), (3, 'ALI Metric Stand-in %s' % metrics.get('postscript', '')),
+                     (4, 'ALI Metric Stand-in'), (6, 'ALIMetricStandIn-%s' % metrics.get('postscript', 'Face'))):
+        name.setName(val, nid, 3, 1, 0x409)
+        name.setName(val, nid, 1, 0, 0)
     for tag in ('GPOS', 'kern', 'fpgm', 'prep', 'cvt ', 'hdmx', 'LTSH', 'VDMX'):
         if tag in tt:
             del tt[tag]

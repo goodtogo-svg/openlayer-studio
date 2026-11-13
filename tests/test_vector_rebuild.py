@@ -250,3 +250,19 @@ def test_adobe_face_laid_out_with_measured_metrics(tmp_path):
     assert abs(f.advance('H', 1000) - 500) < 1 and abs(f.advance(' ', 1000) - 250) < 1
     x0, y0, x1, y1 = f.ink('HI', 1000, (1, 0, 0, 1, 0, 0))   # y-down page space
     assert abs(x0 - 50) <= 1 and abs(x1 - 700) <= 1 and abs(y0 + 667) <= 1 and abs(y1) <= 1
+
+
+def test_accepted_preset_is_bundled():
+    """The 2026-11-13 preset ships its free faces with licences and lays Eurostile Cond Heavy out from its metrics,
+    under a stand-in name that does not reuse the free face's reserved name."""
+    from ali.vector_rebuild.fonts import adobe_candidates, load_adobe_fonts, pool_candidates
+    from ali.vector_rebuild.job import PRESET_ADOBE_FONTS, PRESET_POOL
+    import tempfile
+    pool = pool_candidates([str(PRESET_POOL)])
+    assert {f.postscript for f in pool} == {'Anton-Regular', 'BebasNeue-Regular', 'SairaCondensed-ExtraBold'}
+    assert all(PRESET_POOL.joinpath(n).is_file() for n in ('Anton.LICENSE.txt', 'BebasNeue.LICENSE.txt', 'SairaCondensed.LICENSE.txt'))
+    with tempfile.TemporaryDirectory() as d:
+        cands, rest = adobe_candidates(load_adobe_fonts(PRESET_ADOBE_FONTS), pool, d)
+        assert rest == [] and [f.postscript for f in cands] == ['Anton-Regular', 'BebasNeue-Regular', 'EurostileCon-Hea']
+        e = cands[-1]
+        assert 'Saira' not in e.tt['name'].getDebugName(1) and abs(e.advance('H', 1000) - 500) < 1
