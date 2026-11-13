@@ -171,14 +171,23 @@ def element_art(el, k, shape, fonts, assets):
         w, h = el['size']
         f = el['fill']
         tf = 'translate(%.3f %.3f) rotate(%.4f)' % (el['center'][0], el['center'][1], -el['rotation_deg'])
-        if f['type'] == 'flat':
+        fade = el.get('fade')
+        if f['type'] == 'flat' and fade:
+            # Black end fade over a flat plate, baked into one opaque gradient: the same colours, and no
+            # transparency for the app that opens the PDF to re-interpret (Illustrator darkened the alpha stops).
+            defs.append('<linearGradient id="g%d" gradientUnits="userSpaceOnUse" x1="%.2f" y1="0" x2="%.2f" y2="0">%s</linearGradient>' % (
+                k, -w / 2, w / 2, ''.join('<stop offset="%.3f" stop-color="%s"/>' % (o / 100, _hex([round(c * (1 - a / 100)) for c in f['color']]))
+                                          for o, a in fade)))
+            paint = 'url(#g%d)' % k
+            fade = None
+        elif f['type'] == 'flat':
             paint = _hex(f['color'])
         else:
             defs.append('<linearGradient id="g%d" gradientUnits="userSpaceOnUse" x1="0" y1="%.2f" x2="0" y2="%.2f">%s</linearGradient>' % (
                 k, -h / 2, h / 2, ''.join('<stop offset="%.3f" stop-color="%s"/>' % (o / 100, _hex(c)) for o, c in f['stops'])))
             paint = 'url(#g%d)' % k
         g = ['<rect id="%s PLATE" x="%.2f" y="%.2f" width="%.2f" height="%.2f" fill="%s"/>' % (el['id'], -w / 2, -h / 2, w, h, paint)]
-        if el.get('fade'):
+        if fade:
             defs.append('<linearGradient id="f%d" gradientUnits="userSpaceOnUse" x1="%.2f" y1="0" x2="%.2f" y2="0">%s</linearGradient>' % (
                 k, -w / 2, w / 2, ''.join('<stop offset="%.3f" stop-color="#000000" stop-opacity="%.3f"/>' % (o / 100, a / 100)
                                           for o, a in el['fade'])))
