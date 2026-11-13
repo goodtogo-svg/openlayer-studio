@@ -58,7 +58,7 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
     fi = -1
     for si, (svg, frames) in enumerate(stages):
         art = re.sub(r'<text .*?</text>', '', svg, flags=re.S)
-        if re.search(r'<(path|rect|circle|ellipse|polygon|line|g id="[^"]+">\s*<)', art):
+        if re.search(r'<(path|rect|circle|ellipse|polygon|line|image|g id="[^"]+">\s*<)', art):
             art_pdf = work_dir / ('artwork-%d.pdf' % si)
             cairosvg.svg2pdf(bytestring=art.encode(), write_to=str(art_pdf))
             with pymupdf.open(art_pdf) as spdf:
