@@ -89,7 +89,9 @@ def load_candidates(config, cache_dir):
         if 'variable' in item:
             for weight in item.get('weights', list(VARIABLE_WEIGHTS)):
                 path = instance_variable(item['variable'], weight, cache_dir)
-                fonts.append(Font(path))
+                face = Font(path)
+                face.licence_from = item['variable']   # the instance carries the variable font's licence
+                fonts.append(face)
         else:
             fonts.extend(_file_fonts(item['file'], item.get('postscript'), item.get('number')))
     return fonts
@@ -149,6 +151,19 @@ def pool_candidates(folders, names_file=None, exclude=()):
     return out
 
 
+def pool_candidates_cjk(folders, names_file=None):
+    """Upright CJK faces from the folders (for live CJK text), limited to the faces the target app has."""
+    allowed = installed_names(names_file) if names_file else None
+    out, seen = [], set()
+    for folder in folders:
+        for f in font_pool(folder):
+            if f.postscript in seen or (allowed is not None and f.postscript not in allowed) or not f.is_cjk or _sloped(f):
+                continue
+            seen.add(f.postscript)
+            out.append(f)
+    return out
+
+
 def _sloped(f):
     import re
     name = ('%s %s' % (f.postscript, f.style or '')).lower()
@@ -160,11 +175,11 @@ FREE_LICENCE = ('SIL Open Font License', 'Apache License', 'OFL')
 
 def licence_file(font):
     """The licence text that came with a pool face (OFL.txt, LICENSE*, <Family>.LICENSE.txt), if any."""
-    p = Path(font.path)
+    p = Path(getattr(font, 'licence_from', None) or font.path)
     stem = p.stem.split('_')[0].split('-')[0].lower()
     for c in sorted(p.parent.iterdir()):
         n = c.name.lower()
-        if c.suffix.lower() in ('.txt', '') and ('licen' in n or n.startswith('ofl')) and (n.startswith(stem) or n in ('ofl.txt', 'license.txt')):
+        if c.suffix.lower() in ('.txt', '') and ('licen' in n or 'ofl' in n) and (n.startswith(stem) or n in ('ofl.txt', 'license.txt')):
             return c
     return None
 

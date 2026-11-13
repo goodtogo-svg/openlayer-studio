@@ -122,7 +122,7 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     H, W = src.shape[:2]
-    fonts = load_candidates(font_config, out_dir / 'fonts')
+    fonts = load_candidates(font_config, out_dir / 'work' / 'fonts')
     by_ps = {f.postscript: f for f in fonts}
     report = {'size_px': [W, H]}
 
@@ -305,6 +305,8 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
     report['region_stats'] = stats
     report['layers'] = {n: len(e) for n, e in layers.items()}
     report['text_frames'] = len(frames)
+    from .fonts import ship_fonts
+    report['fonts'] = ship_fonts([f['font'] for f in frames], fonts, out_dir)
     report['score'] = score(out_dir / 'rebuild.pdf', src)
     (out_dir / 'rebuild-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2, default=float))
     return report

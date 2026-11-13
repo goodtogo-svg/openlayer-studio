@@ -79,8 +79,8 @@ def run_job(source, out, locale='auto', fonts=None, pt_per_px=None, timeout=3600
                'font_names': str(Path(font_names).expanduser().resolve()) if font_names else None,
                'adobe_fonts': str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts and adobe_fonts != 'none' else None,
                'font_preset': None}
-    if not fonts and not font_pool:
-        request.update(font_preset='2026-11-13', font_pool=[str(PRESET_POOL)],
+    if not fonts:   # --font-pool folders add to the preset
+        request.update(font_preset='2026-11-13', font_pool=[str(PRESET_POOL)] + request['font_pool'],
                        adobe_fonts=None if adobe_fonts == 'none' else str(Path(adobe_fonts).expanduser().resolve()) if adobe_fonts else str(PRESET_ADOBE_FONTS))
     (out / 'request.json').write_text(json.dumps(request, ensure_ascii=False, indent=2))
     env = os.environ.copy()
@@ -168,14 +168,19 @@ def worker(request_path):
         print('scene: error above %.0f, the image is not a type-and-plates layout; using region rebuild' % SCENE_MAX_MAE, flush=True)
         attempt = out / 'work' / 'scene-attempt'
         attempt.mkdir(parents=True, exist_ok=True)
-        for name in ('scene.svg', 'scene.pdf', 'scene.ai', 'scene.json', 'native'):
+        for name in ('scene.svg', 'scene.pdf', 'scene.ai', 'scene.json', 'native', 'fonts'):
             if (out / name).exists():
                 (out / name).rename(attempt / name)
     masks = segment.tiled_masks(src, log=lambda s: print(s, flush=True))
     label = segment.partition(segment.merge_masks(masks, H, W), H, W)
     np.save(out / 'work' / 'label.npy', label)
     print('segmentation: %d regions' % (label.max() + 1), flush=True)
-    rebuild(src, records, label, req['fonts'], out, pt_per_px=req['pt_per_px'], locale=locale, ocr=ocr,
+    font_config = list(req['fonts'])
+    if req.get('font_pool'):
+        # CJK faces from the pool also serve the region route's live text (the scene route is Latin-only)
+        from .fonts import pool_candidates_cjk
+        font_config += [{'file': f.path, 'postscript': f.postscript} for f in pool_candidates_cjk(req['font_pool'], req.get('font_names'))]
+    rebuild(src, records, label, font_config, out, pt_per_px=req['pt_per_px'], locale=locale, ocr=ocr,
             log=lambda s: print(s, flush=True))
 
 

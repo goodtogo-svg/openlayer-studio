@@ -58,14 +58,24 @@ def fit_matrix(font, text, box, skew, tracking=0.0):
     return (sx, 0, -skew * sx, sy, x - x0, y - y0)
 
 
+def to_traditional(text):
+    """Fix simplified characters the OCR returned, and nothing else: a character that is already a valid
+    traditional form (了, 接) is kept as printed, so 了解 stays 了解 and 連接 is not rewritten to 連線."""
+    import opencc
+    phrase, single = opencc.OpenCC('s2tw'), opencc.OpenCC('s2t')
+    conv = phrase.convert(text)
+    if len(conv) != len(text):
+        return conv
+    return ''.join(o if single.convert(o) == o else c for o, c in zip(text, conv))
+
+
 def normalise_text(text, locale='zh-TW'):
     text = text.strip()
     # A Latin x between CJK characters is almost always a drawn multiplication sign.
     text = re.sub(r'(?<=[㐀-鿿])\s*[xX×]\s*(?=[㐀-鿿]|$)', ' × ', text)
     if locale.lower() in ('zh-tw', 'zh-hant'):
         try:
-            import opencc
-            text = opencc.OpenCC('s2twp').convert(text)
+            text = to_traditional(text)
         except ImportError:
             pass
     return text.strip()
@@ -369,6 +379,9 @@ def _entry(name, text, best, fill, runs, ocr):
             'score': round(best['iou'], 3), 'ocr': ocr}
 
 
+SMALL_CJK_MIN_SCORE = 0.15
+
+
 def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None, trackings=None, debug_dir=None):
     """Returns (specs, glyph_mask_union, report). Coordinates are source pixels."""
     H, W = src.shape[:2]
@@ -376,7 +389,7 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
     # tight setting is matched by the horizontal scale instead.
     trackings = trackings if trackings is not None else [-0.06, -0.03, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]
     skews = skews if skews is not None else [round(s, 2) for s in np.arange(0, 0.36, 0.02)]
-    specs, report = [], []
+    specs, report, weak, solid_refs = [], [], [], []
     union = np.zeros((H, W), bool)
     for n, line in enumerate(merge_lines(records)):
         text = normalise_text(line['text'], locale)
@@ -401,7 +414,9 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
         # Keep colour runs only when they look designed: every run at least two letters, every ink well away
         # from the background. Otherwise shading or a stray cell would split one word into several objects.
         line_runs = [(a, b_, c) for a, b_, c in _runs(text, colours) if text[a:b_].strip()]
-        designed = all((len(text[a:b_].strip()) >= 2 or not text[a:b_].strip().isalnum())
+        # A single highlighted character is designed only at the start or end of the line (a lead-in word).
+        designed = all((len(text[a:b_].strip()) >= 2 or not text[a:b_].strip().isalnum()
+                        or (CJK.search(text[a:b_]) and (not text[:a].strip() or not text[b_:].strip())))
                        and np.linalg.norm(np.array(c, float) - bg) > 100 for a, b_, c in line_runs) and \
             all(np.linalg.norm(np.array(p[2], float) - np.array(q[2], float)) > 100
                 for i, p in enumerate(line_runs) for q in line_runs[i + 1:] if not np.array_equal(p[2], q[2]))
@@ -411,7 +426,10 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
                 lens[tuple(np.round(c, 3))] = lens.get(tuple(np.round(c, 3)), 0) + len(text[a:b_].strip())
             major = np.array(max(lens, key=lens.get), np.float32)
             colours = [major for _ in colours]
-        glyph = _glyph_mask(img, region, colours, line_h)
+        # Every cell's own ink counts for the mask too: a lead-in character in a related colour (blue 該 in grey
+        # body text) snaps to the body colour for the frame but would otherwise drop out of the glyph mask.
+        inks = list(colours) + [c for c in raw if np.linalg.norm(np.array(c, float) - bg) > 100]
+        glyph = _glyph_mask(img, region, inks, line_h)
         occ = _occluder(img, line['box'], colours, bg, line_h, glyph)
         if glyph.sum() < 50:
             report.append({'text': text, 'decision': 'no_glyph_pixels'})
@@ -469,6 +487,10 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
                 Image.fromarray(v).save('%s/fit-%s.png' % (debug_dir, name))
             # Confident OCR of CJK lettering in an unknown display face: accept a looser outline match.
             limit = min_score if not (line['conf'] >= 0.85 and CJK.search(part)) else min(min_score, 0.33)
+            # Small CJK body text: thin strokes make the outline overlap low even for the right face, and a line kept
+            # as artwork comes out as traced, broken glyphs. Confident OCR is enough to set it as live text.
+            if line['conf'] >= 0.85 and CJK.search(part) and line_h <= 40:
+                limit = min(limit, SMALL_CJK_MIN_SCORE)
             if pbest['iou'] < limit:
                 report.append(dict(entry, decision='kept_as_artwork_poor_fit'))
                 continue
@@ -480,9 +502,31 @@ def analyse_text(src, records, fonts, locale='zh-TW', min_score=0.45, skews=None
                 entry['frame'] = [list(map(float, R_inv[0])), list(map(float, R_inv[1]))]
                 entry['angle'] = round(angle, 2)
                 pglyph = cv2.warpAffine(pglyph.astype(np.uint8), R_inv, (W, H), flags=cv2.INTER_NEAREST) > 0
+            if R_inv is None and CJK.search(part):
+                if pbest['iou'] < 0.33:
+                    weak.append((len(specs), len(report), part, pglyph, occ, line_h, pbest, fill, pruns, line['text']))
+                else:
+                    solid_refs.append((line_h, pbest))
             specs.append(entry)
             report.append(dict(entry, decision='live_text'))
             union |= pglyph
+    # A weak fit picks its face almost at random; body lines of one block share a face, so a weak line takes the
+    # face and slant of the best-fitting line of similar height and is refitted with that face only.
+    for si, ri, part, pglyph, occ, line_h, pbest, fill, pruns, ocr_text in weak:
+        near = [b for h, b in solid_refs if abs(h - line_h) <= 0.2 * line_h]
+        if not near:
+            continue
+        ref = max(near, key=lambda b: b['iou'])
+        nb, ng = _fit(part, pglyph, [ref['font']], line_h, [ref['skew']], [ref['tracking']], occ)
+        if nb is None:
+            continue
+        entry = dict(_entry(specs[si]['name'], part, nb, fill, pruns, ocr_text), consensus_with=ref['font'].postscript)
+        entry['decorations'] = specs[si].get('decorations', [])
+        if specs[si].get('behind'):
+            entry['behind'] = True
+        specs[si] = entry
+        report[ri] = dict(entry, decision='live_text')
+        union |= ng
     return specs, union, report
 
 
