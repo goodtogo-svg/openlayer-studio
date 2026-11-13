@@ -125,10 +125,17 @@ def worker(request_path):
         if req.get('font_pool'):
             fonts += pool_candidates(req['font_pool'], req.get('font_names'), exclude={f.postscript for f in fonts})
             print('fonts: %d candidate faces (closest face per line group)' % len(fonts), flush=True)
-        spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
+        adobe_rest = []
         if req.get('adobe_fonts'):
-            from .fonts import adobe_substitutes, load_adobe_fonts
-            for f in adobe_substitutes(spec, fonts, load_adobe_fonts(req['adobe_fonts'])):
+            from .fonts import adobe_candidates, load_adobe_fonts
+            fonts, adobe_rest = adobe_candidates(load_adobe_fonts(req['adobe_fonts']), fonts, out / 'work' / 'fonts')
+            for f in fonts:
+                if f.adobe:
+                    print('fonts: %s is a candidate with its measured metrics (shapes from %s)' % (f.postscript, f.adobe['proxy']), flush=True)
+        spec = scene.extract(src, records, fonts, ocr=ocr, log=lambda s: print(s, flush=True))
+        if adobe_rest:
+            from .fonts import adobe_substitutes
+            for f in adobe_substitutes(spec, fonts, adobe_rest):
                 print('fonts: %s laid out with %s, left for Adobe Fonts activation' % (f.postscript, f.adobe['proxy']), flush=True)
         pdf = scene_build.build(spec, fonts, out, log=lambda s: print(s, flush=True))
         if req.get('font_pool') or req.get('adobe_fonts'):

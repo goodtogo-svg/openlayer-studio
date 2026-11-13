@@ -13,7 +13,7 @@ VARIABLE_WEIGHTS = {'Medium': 500, 'Bold': 700, 'Black': 900}
 class Font:
     def __init__(self, path, postscript=None, number=0):
         self.path = str(path)
-        self.adobe = None  # set by adobe_substitutes: drawn with this file, named and left unembedded as an Adobe Fonts face
+        self.adobe = None  # set by adobe_substitutes / adobe_candidates: drawn with this file, named and left unembedded as an Adobe Fonts face
         self.number = number
         self.tt = TTFont(self.path, fontNumber=number) if self.path.lower().endswith(('.ttc', '.otc')) else TTFont(self.path)
         self.postscript = postscript or self.tt['name'].getDebugName(6)
@@ -206,14 +206,19 @@ def ship_fonts(postscripts, fonts, out_dir):
 
 def load_adobe_fonts(path):
     """Adobe Fonts faces to use instead of a free face family: JSON list of
-    {"postscript", "family", "style", "url", "replaces_family"}. The cloud has no Adobe outlines, so the replaced
-    free face stays the layout proxy; Illustrator activates the Adobe face when the client opens the file."""
+    {"postscript", "family", "style", "url", "replaces_family", "proxy"?, "metrics"?}. The cloud has no Adobe outlines.
+    With "metrics" (a JSON file measured in Illustrator, see adobe_candidates) the face competes in the closest-face
+    match and is laid out with its own advances and ink boxes; without, the replaced free face is the layout proxy.
+    Illustrator activates the Adobe face when the client opens the file."""
+    base = Path(path).parent
     import json
     rows = json.loads(Path(path).read_text())
     for r in rows:
         missing = {'postscript', 'replaces_family'} - set(r)
         if missing:
             raise ValueError('adobe font entry %r lacks %s' % (r, ', '.join(sorted(missing))))
+        if isinstance(r.get('metrics'), str):
+            r['metrics'] = str((base / r['metrics']).resolve())
     return rows
 
 
@@ -226,7 +231,7 @@ def adobe_substitutes(spec, fonts, adobe_rows):
 
     def swap(ps):
         f = by_ps.get(ps)
-        row = by_family.get((f.family or '').lower()) if f else None
+        row = by_family.get((f.family or '').lower()) if f is not None and not f.adobe else None
         if not row:
             return ps
         if row['postscript'] not in added:
@@ -256,3 +261,81 @@ def adobe_substitutes(spec, fonts, adobe_rows):
     walk(spec)
     fonts.extend(added.values())
     return list(added.values())
+
+
+def metric_proxy(proxy_path, metrics, out_path):
+    """A stand-in face for an Adobe Fonts face the cloud cannot download: the free proxy's glyphs, each moved and scaled
+    into the Adobe face's measured ink box and given its measured advance (metrics: {"units_per_em", "glyphs":
+    {char: [advance, xMin, yMin, xMax, yMax]}}, measured in Illustrator). Layout, fitting and preview then follow the
+    Adobe face's metrics. Never shipped: the build names the Adobe face without embedding this file."""
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    tt = TTFont(str(proxy_path))
+    glyf, hmtx = tt['glyf'], tt['hmtx']
+    cmap = tt.getBestCmap()
+    k = tt['head'].unitsPerEm / float(metrics.get('units_per_em', 1000))
+    gs = tt.getGlyphSet()
+    for ch, row in metrics['glyphs'].items():
+        name = cmap.get(ord(ch))
+        if name is None:
+            continue
+        adv = row[0] * k
+        g = glyf[name]
+        if g.isComposite():
+            pen = TTGlyphPen(gs)
+            rec = DecomposingRecordingPen(gs)
+            gs[name].draw(rec)
+            rec.replay(pen)
+            g = glyf[name] = pen.glyph()
+        if len(row) == 5 and g.numberOfContours:
+            g.recalcBounds(glyf)
+            x0, y0, x1, y1 = g.xMin, g.yMin, g.xMax, g.yMax
+            X0, Y0, X1, Y1 = (v * k for v in row[1:])
+            sx = (X1 - X0) / max(x1 - x0, 1)
+            sy = (Y1 - Y0) / max(y1 - y0, 1)
+            coords = g.coordinates
+            for i in range(len(coords)):
+                x, y = coords[i]
+                coords[i] = (round(X0 + (x - x0) * sx), round(Y0 + (y - y0) * sy))
+            if hasattr(g, 'program'):
+                from fontTools.ttLib.tables import ttProgram
+                g.program = ttProgram.Program()
+                g.program.fromBytecode(b'')
+            g.recalcBounds(glyf)
+            hmtx[name] = (round(adv), g.xMin)
+        else:
+            hmtx[name] = (round(adv), hmtx[name][1])
+    for tag in ('GPOS', 'kern', 'fpgm', 'prep', 'cvt ', 'hdmx', 'LTSH', 'VDMX'):
+        if tag in tt:
+            del tt[tag]
+    tt.save(str(out_path))
+    return out_path
+
+
+def adobe_candidates(adobe_rows, fonts, work_dir):
+    """Adobe Fonts faces with measured metrics become candidates in place of the free family they replace (laid out by
+    metric_proxy). Returns (candidates, rows without metrics)."""
+    import json
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    out, rest, replaced = [f for f in fonts], [], set()
+    for row in adobe_rows:
+        if not row.get('metrics'):
+            rest.append(row)
+            continue
+        metrics = row['metrics'] if isinstance(row['metrics'], dict) else json.loads(Path(row['metrics']).read_text())
+        fam = row['replaces_family'].lower()
+        family = [f for f in fonts if (f.family or '').lower() == fam]
+        proxy = next((f for f in family if f.postscript == row.get('proxy')), family[0] if family else None)
+        if proxy is None:
+            raise ValueError('no %s face in the font pool to lay out %s' % (row['replaces_family'], row['postscript']))
+        path = metric_proxy(proxy.path, metrics, work / ('%s.metric-proxy.ttf' % row['postscript']))
+        f = Font(path)
+        f.postscript = row['postscript']
+        f.family, f.style = row.get('family') or f.family, row.get('style') or f.style
+        f.adobe = dict({k: v for k, v in row.items() if k != 'metrics'}, proxy=proxy.postscript)
+        chars = set(metrics['glyphs'])
+        f.covers = lambda text, chars=chars: all(ch in chars for ch in text)
+        replaced.add(fam)
+        out.append(f)
+    out = [f for f in out if f.adobe or (f.family or '').lower() not in replaced]
+    return out, rest

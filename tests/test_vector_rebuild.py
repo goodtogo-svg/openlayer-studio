@@ -232,3 +232,21 @@ def test_adobe_fonts_face_is_named_not_embedded(tmp_path):
         assert d[0].get_fonts()[0][1] != 'n/a'                                                # cloud preview keeps the proxy
     report = ship_fonts(['EurostileCon-Hea'], fonts, tmp_path)
     assert report['adobe_fonts'][0]['url'].startswith('https://fonts.adobe.com') and not report['shipped']
+
+
+def test_adobe_face_laid_out_with_measured_metrics(tmp_path):
+    """An Adobe Fonts face with metrics measured in Illustrator replaces its free family as a candidate, and its
+    stand-in face has exactly the measured advances and ink boxes."""
+    from ali.vector_rebuild.fonts import Font, adobe_candidates
+    if not LIB.is_file():
+        pytest.skip('needs Liberation Sans Bold')
+    free = Font(LIB)
+    metrics = {'units_per_em': 1000, 'glyphs': {' ': [250], 'H': [500, 50, 0, 450, 667], 'I': [240, 40, 0, 200, 667]}}
+    rows = [{'postscript': 'EurostileCon-Hea', 'replaces_family': free.family, 'metrics': metrics}]
+    cands, rest = adobe_candidates(rows, [free], tmp_path)
+    assert rest == [] and [f.postscript for f in cands] == ['EurostileCon-Hea']
+    f = cands[0]
+    assert f.covers('HI H') and not f.covers('HA')
+    assert abs(f.advance('H', 1000) - 500) < 1 and abs(f.advance(' ', 1000) - 250) < 1
+    x0, y0, x1, y1 = f.ink('HI', 1000, (1, 0, 0, 1, 0, 0))   # y-down page space
+    assert abs(x0 - 50) <= 1 and abs(x1 - 700) <= 1 and abs(y0 + 667) <= 1 and abs(y1) <= 1
