@@ -18,3 +18,5 @@ graphics = ["pikepdf==10.17.0"]
 ali = "ali.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
+[tool.setuptools.package-data]
+"ali.vector_rebuild" = ["data/*.json", "data/fonts/*"]
