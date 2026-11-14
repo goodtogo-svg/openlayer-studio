@@ -40,9 +40,11 @@ def text_layer(frames, fonts):
     return decos, texts
 
 
-def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
+def write_pdf(stages, fonts, page_size, out_pdf, work_dir, grouped=False):
     """stages: [(svg, frames), ...] painted in order - each stage's artwork, then its live text on top.
-    Artwork goes through cairo (keeps gradients as shadings, no per-object clip groups), live text through PyMuPDF."""
+    Artwork goes through cairo (keeps gradients as shadings, no per-object clip groups), live text through PyMuPDF.
+    grouped: every stage becomes one form XObject, which Illustrator opens as one group (one group per layer);
+    PDF optional-content layers and SVG groups both open in Illustrator as a single layer."""
     import cairosvg
     import pymupdf
     W, H = page_size
@@ -57,6 +59,9 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
     run_streams = []
     fi = -1
     for si, (svg, frames) in enumerate(stages):
+        if grouped and si > 0:
+            page = doc.new_page(width=W, height=H)
+            used = {}
         art = re.sub(r'<text .*?</text>', '', svg, flags=re.S)
         if re.search(r'<(path|rect|circle|ellipse|polygon|line|image|g id="[^"]+">\s*<)', art):
             art_pdf = work_dir / ('artwork-%d.pdf' % si)
@@ -127,6 +132,17 @@ def write_pdf(stages, fonts, page_size, out_pdf, work_dir):
             for full, ps in names.items():
                 if full and base.replace(' ', '') == full.replace(' ', ''):
                     doc.xref_set_key(x, key, '/' + (tag + '+' if tag else '') + ps)
+    if grouped:
+        staged = work_dir / 'stages.pdf'
+        doc.save(staged, garbage=4, deflate=True)
+        doc.close()
+        doc = pymupdf.open()
+        final = doc.new_page(width=W, height=H)
+        with pymupdf.open(staged) as src:
+            for i in range(src.page_count):
+                if src[i].get_contents():
+                    final.show_pdf_page(final.rect, src, i, keep_proportion=False)
+        staged.unlink()
     adobe = [f for f in fonts if getattr(f, 'adobe', None)]
     if adobe:
         # what the cloud can render: proxy outlines in place of the Adobe faces (cloud preview and scoring only)

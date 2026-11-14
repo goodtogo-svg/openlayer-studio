@@ -298,11 +298,19 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
             part = ''.join('<g id="%s">%s</g>' % (n, ''.join(e)) for n, e in layers.items() if e and n in names)
             return ('<svg xmlns="http://www.w3.org/2000/svg" width="%.2f" height="%.2f" viewBox="0 0 %d %d"><defs>%s</defs>%s</svg>'
                     % (W * k, H * k, W, H, ''.join(defs), part))
-        lower = [n for n in layers if n.startswith('01')]
-        stages = [(doc(lower), [f for f in frames if f.get('behind')]),
-                  (doc([n for n in layers if n not in lower]), [f for f in frames if not f.get('behind')])]
+        # one stage per layer: Illustrator opens each as one group, and make-layers.jsx turns the groups into
+        # named layers
+        behind = [f for f in frames if f.get('behind')]
+        front = [f for f in frames if not f.get('behind')]
+        names, stages = [], []
+        for n, els in layers.items():
+            fr = behind if n == '01b_Text_behind_art' else front if n == '05_Live_text' else []
+            if els or fr:
+                names.append(n)
+                stages.append((doc([n]), fr))
         write_pdf([(art, [dict(f, m=tuple(v * k for v in f['m'])) for f in fr]) for art, fr in stages], fonts,
-                  (W * k, H * k), out_dir / 'rebuild.pdf', out_dir)
+                  (W * k, H * k), out_dir / 'rebuild.pdf', out_dir, grouped=True)
+        write_layer_script(names, out_dir / 'make-layers.jsx')
     assemble()
     # 7. detail pass: where the rebuild still differs from the source (thin outlines and rules the segmenter
     # merged away, shading inside illustrations), trace the source colours as vector paths on their own layer.
@@ -340,6 +348,39 @@ def rebuild(src, ocr_records, label, font_config, out_dir, pt_per_px=None, local
     report['score'] = score(out_dir / 'rebuild.pdf', src)
     (out_dir / 'rebuild-report.json').write_text(json.dumps(report, ensure_ascii=False, indent=2, default=float))
     return report
+
+
+LAYER_SCRIPT = r"""// make-layers.jsx - turns the groups of a rebuilt .ai into named layers.
+// In Illustrator: open the .ai, then File > Scripts > Other Script... and pick this file. Save afterwards.
+// 使用方式：在 Illustrator 開啟 .ai 後，選「檔案 > 指令碼 > 其他指令碼…」，選這個檔案，完成後存檔。
+(function () {
+    var names = %s;   // bottom to top
+    if (!app.documents.length) { alert('Open the rebuilt .ai first.'); return; }
+    var doc = app.activeDocument, src = doc.layers[doc.layers.length - 1];
+    var items = [];
+    for (var i = src.pageItems.length - 1; i >= 0; i--) items.push(src.pageItems[i]);   // bottom first
+    if (items.length != names.length) {
+        alert('Expected ' + names.length + ' groups, found ' + items.length + '. The file was changed; nothing done.');
+        return;
+    }
+    for (var k = 0; k < names.length; k++) {
+        var layer = doc.layers.add();
+        layer.name = names[k];
+        var g = items[k];
+        g.move(layer, ElementPlacement.PLACEATEND);
+        if (g.typename == 'GroupItem') {   // the stage group itself carries nothing; keep its contents
+            while (g.pageItems.length) g.pageItems[g.pageItems.length - 1].move(layer, ElementPlacement.PLACEATBEGINNING);
+            g.remove();
+        }
+    }
+    if (!src.pageItems.length && doc.layers.length > 1) src.remove();
+    alert(names.length + ' layers made.');
+})();
+"""
+
+
+def write_layer_script(names, path):
+    path.write_text(LAYER_SCRIPT % json.dumps(names, ensure_ascii=False), encoding='utf-8')
 
 
 def render(pdf, shape):

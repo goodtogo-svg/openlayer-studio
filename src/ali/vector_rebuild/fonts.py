@@ -210,7 +210,7 @@ def ship_fonts(postscripts, fonts, out_dir):
         dest.mkdir(parents=True, exist_ok=True)
         (dest / 'fonts.json').write_text(json.dumps(report, ensure_ascii=False, indent=2))
         (dest / 'README-zh-TW.txt').write_text(
-            '開啟 scene.ai 前，請先安裝本資料夾內的字型（雙擊字型檔 > 安裝）。\n'
+            '開啟 .ai 前，請先安裝本資料夾內的字型（雙擊字型檔 > 安裝）。\n'
             '這些字型採 SIL Open Font License 或 Apache License，授權條款與字型放在一起。\n'
             '未附上的字型列在 fonts.json 的 not_shipped，請改用 Adobe Fonts 或自行取得授權。\n'
             + ''.join('%s %s 來自 Adobe Fonts（%s）：有 Creative Cloud 的 Illustrator 開檔時會自動啟用，或先到該網址啟用。\n'
